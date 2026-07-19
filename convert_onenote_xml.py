@@ -1355,6 +1355,11 @@ class OneNoteXMLToMarkdownConverter:
         blocks = self.render_cell_blocks(cell_el, ctx)
         if not blocks:
             return ""
+        # If cell content contains a nested Markdown table, do not splice it into
+        # the outer table cell (would produce garbled rendering). Return a placeholder
+        # and let the nested table render as a separate block.
+        if any(self._is_markdown_table_block(b) for b in blocks):
+            return "[详见子表格]"
         if len(blocks) == 1:
             return blocks[0].replace("\n", "<br>")
         return "<br>".join(block.replace("\n", "<br>") for block in blocks)
@@ -1363,6 +1368,10 @@ class OneNoteXMLToMarkdownConverter:
         blocks = self.render_cell_blocks(cell_el, ctx)
         if not blocks:
             return ""
+        # If cell contains a nested Markdown table, return a placeholder to avoid
+        # splicing table rows into heading/label detection logic.
+        if any(self._is_markdown_table_block(b) for b in blocks):
+            return "[子表格]"
         return "<br>".join(block.replace("\n", "<br>") for block in blocks)
 
     def cell_has_nested_structure(self, cell_el: ET.Element) -> bool:
@@ -1441,12 +1450,26 @@ class OneNoteXMLToMarkdownConverter:
             out.append(f"- {cleaned}")
         return out
 
+    @staticmethod
+    def _is_markdown_table_block(text: str) -> bool:
+        """Detect if a block is a Markdown table (all non-empty lines start with |)."""
+        lines = [ln for ln in text.split("\n") if ln.strip()]
+        return len(lines) >= 2 and all(ln.lstrip().startswith("|") for ln in lines)
+
     def indent_blocks(self, blocks: list[str], spaces: int = 4) -> list[str]:
         prefix = " " * spaces
         out: list[str] = []
         for block in blocks:
-            for line in block.split("\n"):
-                out.append(prefix + line if line else "")
+            if self._is_markdown_table_block(block):
+                # Tables must not be indented: indented tables render as code blocks.
+                # Break the parent list context with blank lines so the table renders as a standalone block.
+                out.append("")
+                for line in block.split("\n"):
+                    out.append(line)
+                out.append("")
+            else:
+                for line in block.split("\n"):
+                    out.append(prefix + line if line else "")
         return out
 
 
