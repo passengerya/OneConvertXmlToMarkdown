@@ -67,6 +67,7 @@ def main(page: ft.Page):
 
     status_text = ft.Text("就绪", weight=ft.FontWeight.BOLD, size=14)
     progress = ft.ProgressBar(width=160, color=ft.Colors.BLUE_300, visible=False)
+    log_lines: list[str] = []
 
     md_ctrls = [ddl_syntax, chk_assets, txt_asset]
     all_ctrls = [txt_input, txt_xml, txt_md, chk_empty, chk_skip, chk_assets,
@@ -81,6 +82,9 @@ def main(page: ft.Page):
     def snack(msg: str):
         page.show_dialog(ft.SnackBar(ft.Text(msg), action="关闭",
                                      bgcolor=ft.Colors.ERROR_CONTAINER, open=True))
+
+    def _push_log(msg: str):
+        log_lines.append(msg)
 
     fp = ft.FilePicker()
 
@@ -133,11 +137,10 @@ def main(page: ft.Page):
                                bgcolor=ACC, color=ft.Colors.WHITE)],
         ))
 
-    def show_log_dialog():
-        """Show the conversion log in a dialog, auto-close after 2 seconds."""
+    def show_log_dialog(is_error: bool = False):
+        """Show the conversion log in a dialog. Auto-close after 2s unless error."""
         log_content = ft.Column([], scroll=ft.ScrollMode.AUTO, expand=True)
-
-        def _push(msg: str):
+        for msg in log_lines[-200:]:  # show last 200 lines
             c = ft.Colors.ERROR if "[ERR]" in msg else None
             log_content.controls.append(
                 ft.Text(msg, size=12, font_family="Consolas", selectable=True, color=c))
@@ -148,21 +151,13 @@ def main(page: ft.Page):
             except Exception:
                 pass
 
-        _push(f"[{ts()}] 开始转换")
-        _push(f"输入: {(txt_input.value or '').strip()}")
-        _push(f"XML:  {(txt_xml.value or '').strip()}")
-        if not chk_skip.value:
-            _push(f"MD:   {(txt_md.value or '').strip()}")
-            _push(f"语法: {ddl_syntax.value}")
-        else:
-            _push("Markdown: 跳过")
-        _push("-" * 50)
-
+        footer = ("转换失败，请查看上方错误信息" if is_error
+                  else "此窗口将在 2 秒后自动关闭")
         dialog = ft.AlertDialog(
             modal=True,
             title=ft.Row([
-                ft.Icon(ft.Icons.TERMINAL_OUTLINED, color=ACC),
-                ft.Text("运行日志"),
+                ft.Icon(ft.Icons.TERMINAL_OUTLINED, color=ft.Colors.ERROR if is_error else ACC),
+                ft.Text("运行日志" if not is_error else "运行日志 — 转换失败"),
             ], spacing=8),
             content=ft.Container(
                 content=log_content,
@@ -172,21 +167,20 @@ def main(page: ft.Page):
                 border_radius=8,
                 padding=12,
             ),
-            actions=[ft.Text("此窗口将在 2 秒后自动关闭", size=12, color=ft.Colors.SECONDARY)],
+            actions=[ft.Text(footer, size=12, color=ft.Colors.ERROR if is_error else ft.Colors.SECONDARY)],
             actions_alignment=ft.MainAxisAlignment.CENTER,
         )
         page.show_dialog(dialog)
 
-        # Auto-close after 2 seconds
-        def auto_close():
-            import time
-            time.sleep(2)
-            try:
-                page.run_thread(_close)
-            except Exception:
-                pass
-
-        threading.Thread(target=auto_close, daemon=True).start()
+        if not is_error:
+            def auto_close():
+                import time
+                time.sleep(2)
+                try:
+                    page.run_thread(_close)
+                except Exception:
+                    pass
+            threading.Thread(target=auto_close, daemon=True).start()
 
     # -- pipeline ---------------------------------------------------
     def run(_):
@@ -205,6 +199,7 @@ def main(page: ft.Page):
         if not chk_skip.value and chk_assets.value and not adir: snack("资源目录名不能为空"); return
 
         running = True
+        log_lines.clear()
         status_text.value = "处理中..."
         status_text.color = ft.Colors.ORANGE_400
         progress.value = None
@@ -215,15 +210,25 @@ def main(page: ft.Page):
         btn_stop.visible = True
         page.update()
 
+        log_lines.append(f"[{ts()}] 开始转换")
+        log_lines.append(f"输入: {inp}")
+        log_lines.append(f"XML:  {xout}")
+        if chk_skip.value:
+            log_lines.append("Markdown: 跳过")
+        else:
+            log_lines.append(f"MD:   {mout}")
+            log_lines.append(f"语法: {ddl_syntax.value}")
+        log_lines.append("-" * 50)
+
         # Show popup log dialog
         show_log_dialog()
 
         args = [
             get_ps(), "-NoProfile", "-ExecutionPolicy", "Bypass",
-            "-File", f'"{PS1}"',
-            "-InputOneFile", f'"{inp}"',
-            "-XmlOutputDirectory", f'"{xout}"',
-            "-MarkdownOutputDirectory", f'"{mout}"',
+            "-File", str(PS1),
+            "-InputOneFile", inp,
+            "-XmlOutputDirectory", xout,
+            "-MarkdownOutputDirectory", mout,
             "-LoadTimeoutSeconds", "30",
         ]
         if chk_empty.value:
@@ -232,9 +237,9 @@ def main(page: ft.Page):
             args.append("-SkipMarkdownStage")
         if not chk_skip.value:
             args += ["-ImageSyntax", ddl_syntax.value or "markdown"]
-            args += ["-AssetDirectoryName", f'"{adir}"']
+            args += ["-AssetDirectoryName", adir]
             if not chk_assets.value:
-                args.append("-CopyAssets:\$false")
+                args.append("-CopyAssets:$false")
 
         def worker():
             nonlocal proc
@@ -246,9 +251,18 @@ def main(page: ft.Page):
                     creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
                 )
                 proc = p
-                p.wait()
+                out, err = p.communicate()
+                if out:
+                    for line in out.split("\n"):
+                        if line.strip():
+                            page.run_thread(_push_log, line.strip())
+                if err:
+                    for line in err.split("\n"):
+                        if line.strip():
+                            page.run_thread(_push_log, f"[ERR] {line.strip()}")
                 page.run_thread(finish, p.returncode)
             except Exception as ex:
+                page.run_thread(_push_log, f"[ERR] {ex}")
                 page.run_thread(finish, -1)
 
         def finish(code: int):
@@ -266,6 +280,9 @@ def main(page: ft.Page):
                 status_text.color = ft.Colors.ERROR
                 progress.value = 0
                 progress.color = ft.Colors.ERROR
+                log_lines.append("-" * 50)
+                log_lines.append(f"[{ts()}] 结束, 退出码: {code}")
+                show_log_dialog(is_error=True)
             for c in all_ctrls:
                 c.disabled = False
             on_skip(None)
