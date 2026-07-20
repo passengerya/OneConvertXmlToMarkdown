@@ -33,7 +33,10 @@ def main(page: ft.Page):
     page.window.height = 540
     page.window.min_width = 700
     page.window.min_height = 500
-    page.theme_mode = ft.ThemeMode.DARK
+    # Auto theme: light 06:00–18:00, dark otherwise
+    hour = datetime.now().hour
+    auto_theme = ft.ThemeMode.LIGHT if 6 <= hour < 18 else ft.ThemeMode.DARK
+    page.theme_mode = auto_theme
     page.theme = ft.Theme(color_scheme_seed=ft.Colors.INDIGO)
     page.padding = 20
 
