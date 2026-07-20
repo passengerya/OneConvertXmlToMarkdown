@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """OneConvert Pipeline - Flet Desktop GUI (.one -> XML -> Markdown)"""
 
-import json, os, shutil, subprocess, sys, threading
+import json, os, shutil, subprocess, sys, threading, winreg
 from pathlib import Path
 from datetime import datetime
 
@@ -10,7 +10,23 @@ import flet as ft
 ROOT = Path(__file__).resolve().parent
 PS1  = ROOT / "Convert-OneNoteToMarkdownPipeline.ps1"
 ACC  = ft.Colors.BLUE_ACCENT_400
-DESKTOP = Path.home() / "Desktop"
+
+
+def _desktop_path() -> Path:
+    """Read the actual desktop directory from Windows registry."""
+    try:
+        key = winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER,
+            r"Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders",
+        )
+        val, _ = winreg.QueryValueEx(key, "Desktop")
+        winreg.CloseKey(key)
+        return Path(os.path.expandvars(val))
+    except Exception:
+        return Path.home() / "Desktop"
+
+
+DESKTOP = _desktop_path()
 OUT_BASE = DESKTOP / "OneConvertXmlToMarkdown_Output"
 CONFIG  = ROOT / ".oneconvert_config.json"
 
