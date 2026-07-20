@@ -15,7 +15,10 @@
 - 图片按内容哈希去重，从 XML 嵌入式二进制数据提取
 - 重复运行时自动清理输出目录
 - OneNote 层级加载采用稳定检测（areAllPagesAvailable + 页数稳定确认）
-- Flet 桌面 GUI，暗色主题，日间/夜间切换，窗口自适应
+- Flet 桌面 GUI：暗色/亮色主题、06:00–18:00 自动日间模式、窗口自适应
+- 默认输出到桌面 `~/Desktop/OneConvertXmlToMarkdown_Output/`
+- 图片语法默认 Obsidian（`![[]]`）
+- 配置自动记忆：关闭后再打开保留上次路径和选项
 
 ## 运行环境
 
@@ -36,17 +39,19 @@ pip install flet flet-desktop
 | `convert_onenote_xml.py` | XML → Markdown 核心转换器 |
 | `Convert-OneNoteSectionToXml.ps1` | .one → 分层 XML（OneNote COM） |
 | `Convert-OneNoteToMarkdownPipeline.ps1` | 一键流水线（串联两步） |
+| `release.py` | 一键打包 exe + 发布 GitHub Release |
+| `.oneconvert_config.json` | 用户配置（自动生成，关闭后保留） |
 
 ## 使用方式 — 图形界面（推荐）
 
 双击 `Run-OneConvertGUI.bat`。
 
-- 选择 `.one` 文件，设置 XML / Markdown 输出目录
-- 配置空页面、图片语法、资源导出参数
+- 选择 `.one` 文件，输出目录默认在桌面 `OneConvertXmlToMarkdown_Output/`
+- 图片语法默认 Obsidian，可切换 Markdown
+- 所有配置自动保存至 `.oneconvert_config.json`，重启后恢复
 - 点击"开始转换"，弹出运行日志弹窗
-- 正常完成：弹窗 2 秒后自动关闭
-- 转换失败：弹窗保持打开，显示错误详情
-- 日间/夜间模式切换、关于信息
+- 正常完成：弹窗 2 秒自动关闭；失败：弹窗保持打开显示错误
+- 日间/夜间自动切换 + 手动切换、关于信息
 
 ## 命令行用法
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """OneConvert Pipeline - Flet Desktop GUI (.one -> XML -> Markdown)"""
 
-import os, shutil, subprocess, sys, threading
+import json, os, shutil, subprocess, sys, threading
 from pathlib import Path
 from datetime import datetime
 
@@ -10,6 +10,24 @@ import flet as ft
 ROOT = Path(__file__).resolve().parent
 PS1  = ROOT / "Convert-OneNoteToMarkdownPipeline.ps1"
 ACC  = ft.Colors.BLUE_ACCENT_400
+DESKTOP = Path.home() / "Desktop"
+OUT_BASE = DESKTOP / "OneConvertXmlToMarkdown_Output"
+CONFIG  = ROOT / ".oneconvert_config.json"
+
+
+def load_config() -> dict:
+    try:
+        with open(CONFIG, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+def save_config(cfg: dict):
+    try:
+        with open(CONFIG, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, indent=2, ensure_ascii=False)
+    except Exception:
+        pass
 
 
 def get_ps() -> str:
@@ -43,30 +61,37 @@ def main(page: ft.Page):
     # -- state ------------------------------------------------------
     proc: subprocess.Popen | None = None
     running = False
+    cfg = load_config()
 
-    # -- controls ---------------------------------------------------
+    # -- controls (defaults from saved config or sensible defaults) ---
     txt_input = ft.TextField(
         label="输入 .one 文件", hint_text="点击浏览选择 OneNote 分区文件",
         expand=True, icon=ft.Icons.DESIGN_SERVICES_OUTLINED, dense=True,
+        value=cfg.get("input_file", ""),
     )
     txt_xml = ft.TextField(
-        label="XML 输出目录", value=str(ROOT / "output" / "xml"),
+        label="XML 输出目录",
+        value=cfg.get("xml_dir", str(OUT_BASE / "xml")),
         expand=True, icon=ft.Icons.FOLDER_OUTLINED, dense=True,
     )
     txt_md = ft.TextField(
-        label="Markdown 输出目录", value=str(ROOT / "output" / "markdown"),
+        label="Markdown 输出目录",
+        value=cfg.get("md_dir", str(OUT_BASE / "markdown")),
         expand=True, icon=ft.Icons.FOLDER_OUTLINED, dense=True,
     )
 
-    chk_empty  = ft.Checkbox(label="包含空页面", value=False)
-    chk_skip   = ft.Checkbox(label="仅生成 XML（跳过 Markdown）", value=False)
-    chk_assets = ft.Checkbox(label="复制图片资源", value=True)
+    chk_empty  = ft.Checkbox(label="包含空页面", value=cfg.get("chk_empty", False))
+    chk_skip   = ft.Checkbox(label="仅生成 XML（跳过 Markdown）", value=cfg.get("chk_skip", False))
+    chk_assets = ft.Checkbox(label="复制图片资源", value=cfg.get("chk_assets", True))
     ddl_syntax = ft.Dropdown(
         label="图片语法",
         options=[ft.dropdown.Option("markdown"), ft.dropdown.Option("obsidian")],
-        value="markdown", width=140, dense=True,
+        value=cfg.get("syntax", "obsidian"), width=140, dense=True,
     )
-    txt_asset = ft.TextField(label="资源目录名", value="attachment", width=140, dense=True)
+    txt_asset = ft.TextField(
+        label="资源目录名",
+        value=cfg.get("asset_dir", "attachment"), width=140, dense=True,
+    )
 
     status_text = ft.Text("就绪", weight=ft.FontWeight.BOLD, size=14)
     progress = ft.ProgressBar(width=160, color=ft.Colors.BLUE_300, visible=False)
@@ -82,6 +107,18 @@ def main(page: ft.Page):
                          bgcolor=ft.Colors.TRANSPARENT)
 
     # -- helpers ----------------------------------------------------
+    def save_settings():
+        save_config({
+            "input_file": txt_input.value or "",
+            "xml_dir": txt_xml.value or "",
+            "md_dir": txt_md.value or "",
+            "chk_empty": chk_empty.value,
+            "chk_skip": chk_skip.value,
+            "chk_assets": chk_assets.value,
+            "syntax": ddl_syntax.value or "obsidian",
+            "asset_dir": txt_asset.value or "attachment",
+        })
+
     def snack(msg: str):
         page.show_dialog(ft.SnackBar(ft.Text(msg), action="关闭",
                                      bgcolor=ft.Colors.ERROR_CONTAINER, open=True))
@@ -192,8 +229,8 @@ def main(page: ft.Page):
             return
 
         inp  = (txt_input.value or "").strip()
-        xout = (txt_xml.value or "").strip() or str(ROOT / "output" / "xml")
-        mout = (txt_md.value or "").strip() or str(ROOT / "output" / "markdown")
+        xout = (txt_xml.value or "").strip() or str(OUT_BASE / "xml")
+        mout = (txt_md.value or "").strip() or str(OUT_BASE / "markdown")
         adir = (txt_asset.value or "").strip()
 
         if not inp:              snack("请选择 .one 文件"); return
@@ -239,7 +276,7 @@ def main(page: ft.Page):
         if chk_skip.value:
             args.append("-SkipMarkdownStage")
         if not chk_skip.value:
-            args += ["-ImageSyntax", ddl_syntax.value or "markdown"]
+            args += ["-ImageSyntax", ddl_syntax.value or "obsidian"]
             args += ["-AssetDirectoryName", adir]
             if not chk_assets.value:
                 args.append("-CopyAssets:$false")
@@ -305,6 +342,14 @@ def main(page: ft.Page):
     chk_skip.on_change = on_skip
     btn_run.on_click = run
     btn_stop.on_click = stop
+
+    # Save settings on change
+    for ctrl in [txt_input, txt_xml, txt_md, chk_empty, chk_skip, chk_assets, txt_asset]:
+        orig = ctrl.on_change
+        def _wrap(c, o):
+            c.on_change = lambda e: (save_settings(), o(e) if o else None)
+        _wrap(ctrl, orig)
+    ddl_syntax.on_select = lambda e: save_settings()
 
     # ==============================================================
     #  LAYOUT — single page, no scroll, no inline log
@@ -374,10 +419,11 @@ def main(page: ft.Page):
         ], expand=True, scroll=ft.ScrollMode.AUTO, alignment=ft.MainAxisAlignment.START),
     )
 
-    # Auto-load default .one
-    default = ROOT / "新临检.one"
-    if default.exists():
-        txt_input.value = str(default)
+    # Auto-load default .one (only first run)
+    if not txt_input.value:
+        default = ROOT / "新临检.one"
+        if default.exists():
+            txt_input.value = str(default)
 
 
 if __name__ == "__main__":
