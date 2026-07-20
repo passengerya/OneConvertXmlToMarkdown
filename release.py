@@ -33,7 +33,7 @@ def version_next() -> str:
         m = re.match(r"^v(\d+)\.(\d+)\.(\d+)$", t)
         if m:
             return f"v{int(m[1])}.{int(m[2])}.{int(m[3]) + 1}"
-    return f"v{datetime.now().strftime('%y')}.1.0"
+    return "v1.0.0"
 
 
 def changelog() -> str:
