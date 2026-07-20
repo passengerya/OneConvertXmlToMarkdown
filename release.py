@@ -12,6 +12,8 @@ EXE  = DIST / "OneConvert.exe"
 
 def run(cmd: list[str], **kw) -> subprocess.CompletedProcess:
     print(f"  $ {' '.join(cmd)}")
+    kw.setdefault("encoding", "utf-8")
+    kw.setdefault("errors", "replace")
     return subprocess.run(cmd, cwd=str(ROOT), check=True, **kw)
 
 
@@ -20,12 +22,13 @@ def get_version() -> str:
     try:
         tags = subprocess.check_output(
             ["git", "tag", "--sort=-v:refname"],
-            cwd=str(ROOT), text=True,
+            cwd=str(ROOT), text=True, encoding="utf-8", errors="replace",
         ).strip().split("\n")
     except Exception:
         tags = []
+    tags = [t.strip() for t in tags if t.strip()]
     for tag in tags:
-        m = re.match(r"^v(\d+)\.(\d+)\.(\d+)$", tag.strip())
+        m = re.match(r"^v(\d+)\.(\d+)\.(\d+)$", tag)
         if m:
             major, minor, patch = map(int, m.groups())
             return f"v{major}.{minor}.{patch + 1}"
@@ -34,16 +37,15 @@ def get_version() -> str:
 
 def get_changelog(last_tag: str | None) -> str:
     """Extract commit messages since last tag."""
+    cmd = ["git", "log", "--pretty=format:- %s"]
     if last_tag:
+        cmd.append(f"{last_tag}..HEAD")
+    try:
         log = subprocess.check_output(
-            ["git", "log", f"{last_tag}..HEAD", "--pretty=format:- %s"],
-            cwd=str(ROOT), text=True,
+            cmd, cwd=str(ROOT), text=True, encoding="utf-8", errors="replace",
         ).strip()
-    else:
-        log = subprocess.check_output(
-            ["git", "log", "--pretty=format:- %s"],
-            cwd=str(ROOT), text=True,
-        ).strip()
+    except subprocess.CalledProcessError:
+        log = ""
     return log or "Initial release"
 
 
@@ -70,7 +72,8 @@ def build_exe() -> bool:
         str(ROOT / "OneConvertGUI.py"),
     ]
 
-    result = subprocess.run(args, cwd=str(ROOT))
+    result = subprocess.run(args, cwd=str(ROOT),
+                            encoding="utf-8", errors="replace")
     if result.returncode != 0:
         print("\n  !! Build failed")
         return False
@@ -85,17 +88,22 @@ def main():
     os.chdir(str(ROOT))
 
     # ── check prerequisites ──────────────────────────────
-    for dep, name in [(r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe", "PowerShell"),
-                       ("python", "Python"), ("git", "git"), ("gh", "gh CLI")]:
-        if not subprocess.run(["where", dep], capture_output=True, shell=True).returncode == 0:
-            pass  # soft check
+    missing = []
+    for cmd, name in [("powershell", "PowerShell"), ("python", "Python"),
+                       ("git", "git"), ("gh", "gh CLI")]:
+        found = subprocess.run(["where", cmd], capture_output=True, shell=True,
+                               encoding="utf-8", errors="replace")
+        if found.returncode != 0:
+            missing.append(name)
+    if missing:
+        print(f"  WARNING: not found: {', '.join(missing)}")
 
     # ── determine version ─────────────────────────────────
     version = get_version()
     try:
         last_tag = subprocess.check_output(
             ["git", "describe", "--tags", "--abbrev=0"],
-            cwd=str(ROOT), text=True,
+            cwd=str(ROOT), text=True, encoding="utf-8", errors="replace",
         ).strip()
     except Exception:
         last_tag = None
@@ -125,6 +133,7 @@ def main():
         run(["git", "add", "-A"])
         status = subprocess.check_output(
             ["git", "status", "--porcelain"], cwd=str(ROOT), text=True,
+            encoding="utf-8", errors="replace",
         ).strip()
         if status:
             run(["git", "commit", "-m", f"release: {version}"])
