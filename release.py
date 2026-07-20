@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""One-click: build exe → tag → GitHub Release with changelog."""
+"""One-click: build exe → tag → push → GitHub Release with changelog."""
 
-import os, re, subprocess, sys, textwrap
+import os, re, subprocess, sys
 from datetime import datetime
 from pathlib import Path
 
@@ -10,178 +10,125 @@ DIST = ROOT / "dist"
 EXE  = DIST / "OneConvert.exe"
 
 
-def run(cmd: list[str], **kw) -> subprocess.CompletedProcess:
-    print(f"  $ {' '.join(cmd)}")
-    kw.setdefault("encoding", "utf-8")
-    kw.setdefault("errors", "replace")
-    return subprocess.run(cmd, cwd=str(ROOT), check=True, **kw)
+def run(cmd: list[str], *, timeout: int | None = None):
+    print(f"  > {' '.join(cmd)}")
+    subprocess.run(cmd, cwd=str(ROOT), check=True,
+                   encoding="utf-8", errors="replace",
+                   timeout=timeout)
 
 
-def get_version() -> str:
-    """Return next version from existing tags, or use date-based default."""
+def out(cmd: list[str]) -> str:
     try:
-        tags = subprocess.check_output(
-            ["git", "tag", "--sort=-v:refname"],
-            cwd=str(ROOT), text=True, encoding="utf-8", errors="replace",
-        ).strip().split("\n")
-    except Exception:
-        tags = []
-    tags = [t.strip() for t in tags if t.strip()]
-    for tag in tags:
-        m = re.match(r"^v(\d+)\.(\d+)\.(\d+)$", tag)
-        if m:
-            major, minor, patch = map(int, m.groups())
-            return f"v{major}.{minor}.{patch + 1}"
-    return f"v{datetime.now().strftime('%y')}.1.0"  # e.g. v25.1.0
-
-
-def get_changelog(last_tag: str | None) -> str:
-    """Extract commit messages since last tag."""
-    cmd = ["git", "log", "--pretty=format:- %s"]
-    if last_tag:
-        cmd.append(f"{last_tag}..HEAD")
-    try:
-        log = subprocess.check_output(
-            cmd, cwd=str(ROOT), text=True, encoding="utf-8", errors="replace",
+        return subprocess.check_output(
+            cmd, cwd=str(ROOT), text=True,
+            encoding="utf-8", errors="replace",
         ).strip()
     except subprocess.CalledProcessError:
-        log = ""
+        return ""
+
+
+def version_next() -> str:
+    tags = [t.strip() for t in out(["git", "tag"]).split("\n") if t.strip()]
+    for t in sorted(tags, reverse=True):
+        m = re.match(r"^v(\d+)\.(\d+)\.(\d+)$", t)
+        if m:
+            return f"v{int(m[1])}.{int(m[2])}.{int(m[3]) + 1}"
+    return f"v{datetime.now().strftime('%y')}.1.0"
+
+
+def changelog() -> str:
+    prev = out(["git", "describe", "--tags", "--abbrev=0"])
+    cmd = ["git", "log", "--pretty=format:- %s"]
+    if prev:
+        cmd.append(f"{prev}..HEAD")
+    log = out(cmd)
     return log or "Initial release"
 
 
-def build_exe() -> bool:
-    """Run PyInstaller. Return True on success."""
+def build_exe():
     print("\n" + "=" * 60)
-    print("  STEP 1/4 — Building OneConvert.exe")
+    print("  STEP 1/4  Build OneConvert.exe")
     print("=" * 60)
-
     sep = ";" if sys.platform == "win32" else ":"
-
-    args = [
+    subprocess.run([
         sys.executable, "-m", "PyInstaller",
-        "--onefile", "--windowed",
-        "--name", "OneConvert",
+        "--onefile", "--windowed", "--name", "OneConvert",
         "--add-data", f"{ROOT / 'convert_onenote_xml.py'}{sep}.",
         "--add-data", f"{ROOT / 'Convert-OneNoteSectionToXml.ps1'}{sep}.",
         "--add-data", f"{ROOT / 'Convert-OneNoteToMarkdownPipeline.ps1'}{sep}.",
         "--hidden-import", "flet",
         "--hidden-import", "flet_core",
         "--hidden-import", "flet_desktop",
-        "--clean",
-        "--noconfirm",
+        "--clean", "--noconfirm",
         str(ROOT / "OneConvertGUI.py"),
-    ]
-
-    result = subprocess.run(args, cwd=str(ROOT),
-                            encoding="utf-8", errors="replace")
-    if result.returncode != 0:
-        print("\n  !! Build failed")
-        return False
+    ], cwd=str(ROOT), check=True, encoding="utf-8", errors="replace")
     if not EXE.exists():
-        print(f"\n  !! EXE not found at {EXE}")
-        return False
-    print(f"\n  Built: {EXE}  ({EXE.stat().st_size / 1024 / 1024:.1f} MB)")
-    return True
+        sys.exit(f"Build failed: {EXE} not found")
+    print(f"  Done  ({EXE.stat().st_size / 1024 / 1024:.1f} MB)")
+
+
+def stage_and_tag(version: str, changes: str):
+    print("\n" + "=" * 60)
+    print("  STEP 2/4  Git tag")
+    print("=" * 60)
+    run(["git", "add", "-A"])
+    s = out(["git", "status", "--porcelain"])
+    if s:
+        run(["git", "commit", "-m", f"release: {version}"])
+    else:
+        print("  (nothing to commit)")
+    short = changes.split("\n")[0][:80] if changes else version
+    run(["git", "tag", "-a", version, "-m", short])
+
+    print("\n" + "=" * 60)
+    print("  STEP 3/4  Push")
+    print("=" * 60)
+    try:
+        run(["git", "push", "origin", "HEAD"], timeout=30)
+        run(["git", "push", "origin", version], timeout=30)
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        print("  push 失败 (网络不通)，tag 已本地保存。")
+        print(f"  稍后手动: git push origin HEAD && git push origin {version}")
+
+
+def github_release(version: str, changes: str):
+    print("\n" + "=" * 60)
+    print("  STEP 4/4  GitHub Release")
+    print("=" * 60)
+    if subprocess.run(["where", "gh"], capture_output=True, shell=True).returncode != 0:
+        print("  gh CLI 未安装，跳过。")
+        print(f"  手动: 在 GitHub Releases 创建 {version}，附加 {EXE.name}")
+        return
+    try:
+        run([
+            "gh", "release", "create", version, str(EXE),
+            "--title", f"OneConvert {version}",
+            "--notes", changes,
+        ], timeout=60)
+        print(f"  Released {version}")
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        print(f"  上传失败 (网络不通)。")
+        print(f"  手动: gh release create {version} {EXE}")
 
 
 def main():
     os.chdir(str(ROOT))
+    ver = version_next()
+    log = changelog()
 
-    # ── check prerequisites ──────────────────────────────
-    missing = []
-    for cmd, name in [("powershell", "PowerShell"), ("python", "Python"),
-                       ("git", "git"), ("gh", "gh CLI")]:
-        found = subprocess.run(["where", cmd], capture_output=True, shell=True,
-                               encoding="utf-8", errors="replace")
-        if found.returncode != 0:
-            missing.append(name)
-    if missing:
-        print(f"  WARNING: not found: {', '.join(missing)}")
-
-    # ── determine version ─────────────────────────────────
-    version = get_version()
-    try:
-        last_tag = subprocess.check_output(
-            ["git", "describe", "--tags", "--abbrev=0"],
-            cwd=str(ROOT), text=True, encoding="utf-8", errors="replace",
-        ).strip()
-    except Exception:
-        last_tag = None
-
-    changelog = get_changelog(last_tag)
-
-    print("\n" + "=" * 60)
-    print(f"  OneConvert Release — {version}")
-    print("=" * 60)
-    print(f"\n  Previous tag: {last_tag or '(none)'}")
-    print(f"\n  Changes:")
-    for line in changelog.split("\n")[:20]:
+    print(f"\n  OneConvert Release — {ver}")
+    print(f"  Changes:")
+    for line in log.split("\n"):
         print(f"    {line}")
-    if len(changelog.split("\n")) > 20:
-        print(f"    ... and {len(changelog.split(changelog)) - 20} more")
-    print()
 
-    # ── step 1: build ─────────────────────────────────────
-    if not build_exe():
-        sys.exit(1)
+    build_exe()
+    stage_and_tag(ver, log)
+    github_release(ver, log)
 
-    # ── step 2: commit pending changes ────────────────────
-    print("\n" + "=" * 60)
-    print("  STEP 2/4 — Staging changes")
-    print("=" * 60)
-    try:
-        run(["git", "add", "-A"])
-        status = subprocess.check_output(
-            ["git", "status", "--porcelain"], cwd=str(ROOT), text=True,
-            encoding="utf-8", errors="replace",
-        ).strip()
-        if status:
-            run(["git", "commit", "-m", f"release: {version}"])
-        else:
-            print("  (nothing to commit)")
-    except subprocess.CalledProcessError as e:
-        print(f"  Warning: {e}")
-
-    # ── step 3: tag ───────────────────────────────────────
-    print("\n" + "=" * 60)
-    print("  STEP 3/4 — Creating tag & pushing")
-    print("=" * 60)
-    run(["git", "tag", "-a", version, "-m", f"{version}: {changelog.split(chr(10))[0]}"])
-    try:
-        run(["git", "push", "origin", version], timeout=15)
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
-        print(f"\n  git push failed (network unreachable?), tag saved locally.")
-        print(f"  手动推送: git push origin {version}")
-
-    # ── step 4: GitHub Release ────────────────────────────
-    print("\n" + "=" * 60)
-    print("  STEP 4/4 — Creating GitHub Release")
-    print("=" * 60)
-
-    gh_installed = subprocess.run(
-        ["where", "gh"], capture_output=True, shell=True,
-        encoding="utf-8", errors="replace",
-    ).returncode == 0
-
-    if gh_installed:
-        try:
-            run([
-                "gh", "release", "create", version,
-                str(EXE),
-                "--title", f"OneConvert {version}",
-                "--notes", changelog,
-            ])
-        except subprocess.CalledProcessError as e:
-            print(f"\n  Release upload failed (network unreachable?)")
-            print(f"  手动上传: gh release create {version} {EXE}")
-    else:
-        print("\n  gh CLI 未安装，跳过 GitHub Release。")
-        print(f"  手动上传: 在 Releases 页面创建 {version}，附加 {EXE.name}")
-
-    print("\n" + "=" * 60)
-    print(f"  Build complete — {version}")
+    print(f"\n  {'=' * 60}")
+    print(f"  完成 — {ver}")
     print(f"  Exe: {EXE}")
-    print("=" * 60)
+    print(f"  {'=' * 60}")
 
 
 if __name__ == "__main__":
