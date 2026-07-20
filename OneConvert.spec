@@ -1,12 +1,18 @@
 # -*- mode: python ; coding: utf-8 -*-
+from PyInstaller.utils.hooks import collect_data_files
+
+datas = [('E:\\Code\\OneConvertXmlToMarkdown\\convert_onenote_xml.py', '.'), ('E:\\Code\\OneConvertXmlToMarkdown\\Convert-OneNoteSectionToXml.ps1', '.'), ('E:\\Code\\OneConvertXmlToMarkdown\\Convert-OneNoteToMarkdownPipeline.ps1', '.')]
+datas += collect_data_files('flet')
+datas += collect_data_files('flet_core')
+datas += collect_data_files('flet_desktop')
 
 
 a = Analysis(
     ['E:\\Code\\OneConvertXmlToMarkdown\\OneConvertGUI.py'],
     pathex=[],
     binaries=[],
-    datas=[('E:\\Code\\OneConvertXmlToMarkdown\\convert_onenote_xml.py', '.'), ('E:\\Code\\OneConvertXmlToMarkdown\\Convert-OneNoteSectionToXml.ps1', '.'), ('E:\\Code\\OneConvertXmlToMarkdown\\Convert-OneNoteToMarkdownPipeline.ps1', '.')],
-    hiddenimports=['flet', 'flet_core', 'flet_desktop'],
+    datas=datas,
+    hiddenimports=[],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

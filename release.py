@@ -56,9 +56,9 @@ def build_exe():
         "--add-data", f"{ROOT / 'convert_onenote_xml.py'}{sep}.",
         "--add-data", f"{ROOT / 'Convert-OneNoteSectionToXml.ps1'}{sep}.",
         "--add-data", f"{ROOT / 'Convert-OneNoteToMarkdownPipeline.ps1'}{sep}.",
-        "--hidden-import", "flet",
-        "--hidden-import", "flet_core",
-        "--hidden-import", "flet_desktop",
+        "--collect-data", "flet",
+        "--collect-data", "flet_core",
+        "--collect-data", "flet_desktop",
         "--clean", "--noconfirm",
         str(ROOT / "OneConvertGUI.py"),
     ], cwd=str(ROOT), check=True, encoding="utf-8", errors="replace")

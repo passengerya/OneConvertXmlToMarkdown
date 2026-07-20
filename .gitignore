@@ -1,20 +1,26 @@
-# Build and Release Folders
-bin-debug/
-bin-release/
-[Oo]bj/
-[Bb]in/
+# Build artifacts
+build/
+dist/
+*.spec
+__pycache__/
+*.pyc
+output/
 
-# Other files and folders
+# IDE
+.vs/
+.vscode/
 .settings/
+Debug/
+Release/
 
 # Executables
+*.exe
 *.swf
 *.air
 *.ipa
 *.apk
 
-#过滤掉不想要文件和文件夹
-#*.exe
+# Project
 *.sln
 *.vcxproj
 *.filters
@@ -22,11 +28,5 @@ bin-release/
 *.suo
 *.db
 *.ipch
-Debug/
-.vs
-Release/
-*.one、
+*.one
 *.xml
-# Project files, i.e. `.project`, `.actionScriptProperties` and `.flexProperties`
-# should NOT be excluded as they contain compiler settings and other important
-# information for Eclipse / Flash Builder.
