@@ -147,22 +147,40 @@ def main():
     print("  STEP 3/4 — Creating tag & pushing")
     print("=" * 60)
     run(["git", "tag", "-a", version, "-m", f"{version}: {changelog.split(chr(10))[0]}"])
-    run(["git", "push", "origin", version])
+    try:
+        run(["git", "push", "origin", version], timeout=15)
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
+        print(f"\n  git push failed (network unreachable?), tag saved locally.")
+        print(f"  手动推送: git push origin {version}")
 
     # ── step 4: GitHub Release ────────────────────────────
     print("\n" + "=" * 60)
     print("  STEP 4/4 — Creating GitHub Release")
     print("=" * 60)
-    run([
-        "gh", "release", "create", version,
-        str(EXE),
-        "--title", f"OneConvert {version}",
-        "--notes", changelog,
-    ])
+
+    gh_installed = subprocess.run(
+        ["where", "gh"], capture_output=True, shell=True,
+        encoding="utf-8", errors="replace",
+    ).returncode == 0
+
+    if gh_installed:
+        try:
+            run([
+                "gh", "release", "create", version,
+                str(EXE),
+                "--title", f"OneConvert {version}",
+                "--notes", changelog,
+            ])
+        except subprocess.CalledProcessError as e:
+            print(f"\n  Release upload failed (network unreachable?)")
+            print(f"  手动上传: gh release create {version} {EXE}")
+    else:
+        print("\n  gh CLI 未安装，跳过 GitHub Release。")
+        print(f"  手动上传: 在 Releases 页面创建 {version}，附加 {EXE.name}")
 
     print("\n" + "=" * 60)
-    print(f"  Released {version} successfully!")
-    print(f"  {EXE}")
+    print(f"  Build complete — {version}")
+    print(f"  Exe: {EXE}")
     print("=" * 60)
 
 
