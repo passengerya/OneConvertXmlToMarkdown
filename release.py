@@ -96,15 +96,19 @@ def github_release(version: str, changes: str):
     print("  STEP 4/4  GitHub Release")
     print("=" * 60)
     # Find gh CLI
-    gh = "gh"
-    if subprocess.run(["where", "gh"], capture_output=True, shell=True).returncode != 0:
-        alt = r"C:\Program Files\GitHub CLI\gh.exe"
-        if os.path.exists(alt):
-            gh = alt
-        else:
-            print("  gh CLI 未安装，跳过。")
-            print(f"  手动: 在 GitHub Releases 创建 {version}，附加 {EXE.name}")
-            return
+    gh_paths = ["gh", r"C:\Program Files\GitHub CLI\gh.exe"]
+    gh = None
+    for p in gh_paths:
+        try:
+            if subprocess.run([p, "--version"], capture_output=True, timeout=5).returncode == 0:
+                gh = p
+                break
+        except Exception:
+            continue
+    if not gh:
+        print("  gh CLI 未安装，跳过 Release。")
+        print(f"  手动: 在 GitHub Releases 创建 {version}，附加 {EXE.name}")
+        return
         print("  gh CLI 未安装，跳过。")
         print(f"  手动: 在 GitHub Releases 创建 {version}，附加 {EXE.name}")
         return
