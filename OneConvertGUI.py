@@ -283,11 +283,14 @@ def main(page: ft.Page):
         ("<font>彩色</font>", "<font>"),
     ]
 
-    def _show_annotation_dialog(callback):
-        """Show dialog: all OneNote types → pick Obsidian target manually."""
+    def _show_annotation_dialog(callback, found: list[str]):
+        """Show dialog: only detected OneNote types → pick Obsidian target."""
+        if not found:
+            callback()
+            return
         dd_map: dict[str, ft.Dropdown] = {}
         rows = []
-        for label, _, _ in ANNOTATION_TYPES:
+        for label in found:
             dd = ft.Dropdown(
                 options=[ft.dropdown.Option(n) for n, _ in OBSIDIAN_TARGETS],
                 value="不转换", width=170, dense=True,
@@ -398,6 +401,7 @@ def main(page: ft.Page):
                 code = 0; total_md = 0; ext_imgs = 0; pl_imgs = 0
                 all_written: list[Path] = []
                 xml_dirs: list[Path] = []
+                found_list: list[str] = []
                 try:
                     sys.path.insert(0, str(ROOT))
                     import convert_onenote_xml as converter
@@ -443,7 +447,23 @@ def main(page: ft.Page):
                     for xml_path in xmls:
                         xml_dirs.append(Path(xml_path))
 
-                    # ── Phase 2: XML → MD ──
+                    # ── Phase 2: scan XML for annotation types ──
+                    if chk_annotate.value and xml_dirs:
+                        found = set()
+                        for xml_src in xml_dirs:
+                            try:
+                                fps = [xml_src] if xml_src.is_file() else list(xml_src.rglob("*.xml"))
+                                for xf in fps:
+                                    t = xf.read_text(encoding="utf-8", errors="replace")
+                                    for label, open_pat, _ in ANNOTATION_TYPES:
+                                        if re.search(open_pat, t) and label not in found:
+                                            found.add(label)
+                            except Exception:
+                                pass
+                        found_list = sorted(found, key=lambda x: [l for l, _, _ in ANNOTATION_TYPES].index(x))
+                        log_lines.append(f"  检测标注: {', '.join(found_list) if found_list else '无'}")
+
+                    # ── Phase 3: XML → MD ──
                     if not chk_skip.value:
                         for xml_src in xml_dirs:
                             if xml_src.is_file():
@@ -494,7 +514,7 @@ def main(page: ft.Page):
                     log_lines.append(f"[ERR] {ex}")
                     code = 1
 
-                # ── Phase 3: apply annotations ──
+                # ── Phase 4: apply annotations ──
                 if chk_annotate.value:
                     def _apply_and_finish():
                         for md_path in all_written:
@@ -504,7 +524,7 @@ def main(page: ft.Page):
                             except Exception:
                                 pass
                         page.run_thread(finish, code)
-                    page.run_thread(lambda: _show_annotation_dialog(_apply_and_finish))
+                    page.run_thread(lambda: _show_annotation_dialog(_apply_and_finish, found_list))
                 else:
                     page.run_thread(finish, code)
 
