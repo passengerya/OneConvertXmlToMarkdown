@@ -286,6 +286,7 @@ def main(page: ft.Page):
     def _show_annotation_dialog(callback, found: list[str]):
         """Show dialog: only detected OneNote types → pick Obsidian target."""
         if not found:
+            snack("未检测到任何标注类型（彩色、粗体、斜体、删除线、下划线、高亮）")
             callback()
             return
         dd_map: dict[str, ft.Dropdown] = {}
@@ -461,7 +462,10 @@ def main(page: ft.Page):
                             except Exception:
                                 pass
                         found_list = sorted(found, key=lambda x: [l for l, _, _ in ANNOTATION_TYPES].index(x))
-                        log_lines.append(f"  检测标注: {', '.join(found_list) if found_list else '无'}")
+                        msg = f"检测到 {len(found_list)} 种标注: {', '.join(found_list)}" if found_list else "未检测到标注类型"
+                        log_lines.append(f"  {msg}")
+                        status_text.value = msg
+                        page.update()
 
                     # ── Phase 3: XML → MD ──
                     if not chk_skip.value:
