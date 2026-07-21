@@ -403,13 +403,15 @@ def main(page: ft.Page):
                 nonlocal proc
                 code = 0; total_md = 0; ext_imgs = 0; pl_imgs = 0
                 all_written: list[Path] = []
+                xml_dirs: list[Path] = []
+                found_list: list[str] = []
                 try:
                     sys.path.insert(0, str(ROOT))
                     import convert_onenote_xml as converter
 
+                    # ── Phase 1: .one → XML ──
                     for one_path in ones:
                         stem = Path(one_path).stem
-                        mout_one = Path(mout_base) / stem
                         log_lines.append(f"[{ts()}] .one -> XML: {stem}")
                         ps_args = [
                             get_ps(), "-NoProfile", "-ExecutionPolicy", "Bypass",
@@ -437,45 +439,66 @@ def main(page: ft.Page):
                             log_lines.append(f"[ERR] {stem} XML 转换失败")
                             code = max(code, p1.returncode)
                             continue
-                        if not chk_skip.value:
-                            xml_dir = Path(xout_base) / stem
-                            if xml_dir.exists():
+                        xml_dir = Path(xout_base) / stem
+                        if xml_dir.exists():
+                            xml_dirs.append(xml_dir)
+                            log_lines.append(f"  {stem} XML done")
+                        else:
+                            log_lines.append(f"[ERR] XML 目录不存在: {xml_dir}")
+
+                    # XML input files are their own source
+                    for xml_path in xmls:
+                        xml_dirs.append(Path(xml_path))
+
+                    # ── Phase 2: scan XML for annotations ──
+                    if chk_annotate.value and xml_dirs:
+                        found = set()
+                        for xml_src in xml_dirs:
+                            try:
+                                files_to_scan = [xml_src] if xml_src.is_file() else list(xml_src.rglob("*.xml"))
+                                for xf in files_to_scan:
+                                    t = xf.read_text(encoding="utf-8", errors="replace")
+                                    for label, open_pat, _ in ANNOTATION_TYPES:
+                                        if re.search(open_pat, t) and label not in found:
+                                            found.add(label)
+                            except Exception:
+                                pass
+                        found_list = sorted(found, key=lambda x: [l for l, _, _ in ANNOTATION_TYPES].index(x))
+                        log_lines.append(f"  检测到标注: {', '.join(found_list) if found_list else '无'}")
+                    # ── Phase 3: XML → MD ──
+                    if not chk_skip.value:
+                        for xml_src in xml_dirs:
+                            if xml_src.is_file():
+                                # Single XML file
+                                mout_all = Path(mout_base)
+                                mout_all.mkdir(parents=True, exist_ok=True)
+                                written, resolver = converter.convert_path(
+                                    xml_input=xml_src, output_dir=mout_all,
+                                    attachment_dir=None, sort_key="name",
+                                    recursive=False, image_syntax=syntax,
+                                    copy_attachments=chk_assets.value,
+                                    asset_dir_name=asset_rel,
+                                )
+                            else:
+                                # XML directory (from .one)
+                                stem = xml_src.name
+                                mout_one = Path(mout_base) / stem
                                 mout_one.mkdir(parents=True, exist_ok=True)
                                 written, resolver = converter.convert_path(
-                                    xml_input=xml_dir, output_dir=mout_one,
+                                    xml_input=xml_src, output_dir=mout_one,
                                     attachment_dir=None, sort_key="name",
                                     recursive=True, image_syntax=syntax,
                                     copy_attachments=chk_assets.value,
                                     asset_dir_name=asset_rel,
                                 )
-                                total_md += len(written)
-                                ext_imgs += resolver.extracted_from_xml_count
-                                pl_imgs += resolver.placeholder_count
-                                log_lines.append(f"  {stem} -> {len(written)} md")
-                                all_written.extend(written)
-                                if chk_md_only.value:
-                                    try: shutil.rmtree(xml_dir)
-                                    except Exception: pass
-                            else:
-                                log_lines.append(f"[ERR] XML 目录不存在: {xml_dir}")
-
-                    for xml_path in xmls:
-                        if not chk_skip.value:
-                            log_lines.append(f"[{ts()}] XML -> MD: {Path(xml_path).name}")
-                            mout_all = Path(mout_base)
-                            mout_all.mkdir(parents=True, exist_ok=True)
-                            written, resolver = converter.convert_path(
-                                xml_input=Path(xml_path), output_dir=mout_all,
-                                attachment_dir=None, sort_key="name",
-                                recursive=False, image_syntax=syntax,
-                                copy_attachments=chk_assets.value,
-                                asset_dir_name=asset_rel,
-                            )
                             total_md += len(written)
                             ext_imgs += resolver.extracted_from_xml_count
                             pl_imgs += resolver.placeholder_count
-                            log_lines.append(f"  -> {len(written)} md")
+                            log_lines.append(f"  {xml_src.name} -> {len(written)} md")
                             all_written.extend(written)
+                            if chk_md_only.value and xml_src.is_dir():
+                                try: shutil.rmtree(xml_src)
+                                except Exception: pass
 
                     if chk_md_only.value and chk_skip.value:
                         try:
@@ -493,31 +516,17 @@ def main(page: ft.Page):
                     log_lines.append(f"[ERR] {ex}")
                     code = 1
 
-                if chk_annotate.value and all_written:
-                    # Scan generated .md files for annotation types
-                    found = set()
-                    for md_path in all_written:
-                        try:
-                            t = md_path.read_text(encoding="utf-8", errors="replace")
-                            for label, open_pat, _ in ANNOTATION_TYPES:
-                                if re.search(open_pat, t) and label not in found:
-                                    found.add(label)
-                        except Exception:
-                            pass
-                    found_list = sorted(found, key=lambda x: [l for l, _, _ in ANNOTATION_TYPES].index(x))
-                    log_lines.append(f"  检测到标注: {', '.join(found_list) if found_list else '无'}")
-                    if found_list:
-                        def _apply_and_finish():
-                            for md_path in all_written:
-                                try:
-                                    t = md_path.read_text(encoding="utf-8")
-                                    md_path.write_text(_apply_annotations(t), encoding="utf-8")
-                                except Exception:
-                                    pass
-                            page.run_thread(finish, code)
-                        page.run_thread(lambda: _show_annotation_dialog(_apply_and_finish, found_list))
-                    else:
+                # ── Phase 4: apply annotations (dialog if types found) ──
+                if found_list:
+                    def _apply_and_finish():
+                        for md_path in all_written:
+                            try:
+                                t = md_path.read_text(encoding="utf-8")
+                                md_path.write_text(_apply_annotations(t), encoding="utf-8")
+                            except Exception:
+                                pass
                         page.run_thread(finish, code)
+                    page.run_thread(lambda: _show_annotation_dialog(_apply_and_finish, found_list))
                 else:
                     page.run_thread(finish, code)
 
