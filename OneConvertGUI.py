@@ -8,6 +8,9 @@ from datetime import datetime
 import flet as ft
 
 ROOT = Path(__file__).resolve().parent
+# PyInstaller onefile: sys._MEIPASS is the temp extraction dir
+if getattr(sys, "frozen", False):
+    ROOT = Path(sys._MEIPASS)
 PS1  = ROOT / "Convert-OneNoteToMarkdownPipeline.ps1"
 ACC  = ft.Colors.BLUE_ACCENT_400
 
@@ -238,7 +241,7 @@ def main(page: ft.Page):
                     pass
             threading.Thread(target=auto_close, daemon=True).start()
 
-    # -- pipeline ---------------------------------------------------
+    # -- pipeline (2-step: PS for XML, in-process for Markdown) --
     def run(_):
         nonlocal proc, running
         if running:
@@ -276,50 +279,89 @@ def main(page: ft.Page):
             log_lines.append(f"语法: {ddl_syntax.value}")
         log_lines.append("-" * 50)
 
-        # Show popup log dialog
         show_log_dialog()
 
-        args = [
+        # Step 1: .one → XML (PowerShell + OneNote COM)
+        xml_script = str(ROOT / "Convert-OneNoteSectionToXml.ps1")
+        ps_args = [
             get_ps(), "-NoProfile", "-ExecutionPolicy", "Bypass",
-            "-File", str(PS1),
+            "-File", xml_script,
             "-InputOneFile", inp,
-            "-XmlOutputDirectory", xout,
-            "-MarkdownOutputDirectory", mout,
+            "-OutputDirectory", xout,
             "-LoadTimeoutSeconds", "30",
         ]
         if chk_empty.value:
-            args.append("-IncludeEmptyPages")
-        if chk_skip.value:
-            args.append("-SkipMarkdownStage")
-        if not chk_skip.value:
-            args += ["-ImageSyntax", ddl_syntax.value or "obsidian"]
-            args += ["-AssetDirectoryName", adir]
-            if not chk_assets.value:
-                args.append("-CopyAssets:$false")
+            ps_args.append("-IncludeEmptyPages")
+
+        # Step 2: XML → Markdown (in-process, no system Python needed)
+        md_script = str(ROOT / "convert_onenote_xml.py")
+        syntax = ddl_syntax.value or "obsidian"
+        asset_flag = f"--asset-dir" if chk_assets.value else None
 
         def worker():
             nonlocal proc
+            code = -1
             try:
-                p = subprocess.Popen(
-                    args, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                # ── Step 1: .one → XML ──
+                log_lines.append(f"[{ts()}] 步骤1/2: .one → XML")
+                p1 = subprocess.Popen(
+                    ps_args, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                     text=True, encoding="utf-8", errors="replace",
                     cwd=str(ROOT),
                     creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
                 )
-                proc = p
-                out, err = p.communicate()
-                if out:
-                    for line in out.split("\n"):
+                proc = p1
+                out1, err1 = p1.communicate(timeout=180)
+                if out1:
+                    for line in out1.split("\n"):
                         if line.strip():
                             page.run_thread(_push_log, line.strip())
-                if err:
-                    for line in err.split("\n"):
+                if err1:
+                    for line in err1.split("\n"):
                         if line.strip():
                             page.run_thread(_push_log, f"[ERR] {line.strip()}")
-                page.run_thread(finish, p.returncode)
+                if p1.returncode != 0:
+                    log_lines.append(f"[ERR] 步骤1失败, 退出码: {p1.returncode}")
+                    page.run_thread(finish, p1.returncode)
+                    return
+
+                # ── Step 2: XML → Markdown (in-process) ──
+                if not chk_skip.value:
+                    log_lines.append(f"[{ts()}] 步骤2/2: XML → Markdown")
+                    sys.path.insert(0, str(ROOT))
+                    import convert_onenote_xml as converter
+                    out_dir = Path(mout)
+                    out_dir.mkdir(parents=True, exist_ok=True)
+                    xml_dir = Path(xout) / Path(inp).stem
+                    if xml_dir.exists():
+                        written, resolver = converter.convert_path(
+                            xml_input=xml_dir,
+                            output_dir=out_dir,
+                            attachment_dir=None,
+                            sort_key="name",
+                            recursive=True,
+                            image_syntax=syntax,
+                            copy_attachments=chk_assets.value,
+                            asset_dir_name=adir,
+                        )
+                        log_lines.append(f"  生成 {len(written)} 个 Markdown 文件")
+                        if resolver.placeholder_count:
+                            log_lines.append(f"  占位图: {resolver.placeholder_count}")
+                        if resolver.extracted_from_xml_count:
+                            log_lines.append(f"  提取图片: {resolver.extracted_from_xml_count}")
+                    else:
+                        log_lines.append(f"[ERR] XML 目录不存在: {xml_dir}")
+                        page.run_thread(finish, 1)
+                        return
+
+                code = 0
+            except subprocess.TimeoutExpired:
+                log_lines.append("[ERR] 步骤1超时(180s)")
+                code = 1
             except Exception as ex:
-                page.run_thread(_push_log, f"[ERR] {ex}")
-                page.run_thread(finish, -1)
+                log_lines.append(f"[ERR] {ex}")
+                code = 1
+            page.run_thread(finish, code)
 
         def finish(code: int):
             nonlocal running
