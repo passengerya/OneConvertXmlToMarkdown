@@ -103,6 +103,8 @@ def main(page: ft.Page):
     chk_skip   = ft.Checkbox(label="仅生成 XML（跳过 Markdown）", value=cfg.get("chk_skip", False))
     chk_assets = ft.Checkbox(label="复制图片资源", value=cfg.get("chk_assets", True))
     chk_md_only = ft.Checkbox(label="仅生成 Markdown（不保留 XML）", value=cfg.get("chk_md_only", False))
+    chk_annotate = ft.Checkbox(label="标注转换（OneNote 标注 → Obsidian）",
+                                value=cfg.get("chk_annotate", False))
     ddl_syntax = ft.Dropdown(
         label="图片语法",
         options=[ft.dropdown.Option("markdown"), ft.dropdown.Option("obsidian")],
@@ -119,7 +121,7 @@ def main(page: ft.Page):
 
     md_ctrls = [ddl_syntax, chk_assets, txt_asset]
     all_ctrls = [txt_input, txt_xml, txt_md, chk_empty, chk_skip, chk_assets, chk_md_only,
-                 ddl_syntax, txt_asset]
+                 chk_annotate, ddl_syntax, txt_asset]
 
     btn_run = ft.Button(content=ft.Text("开始转换"), icon=ft.Icons.PLAY_ARROW,
                         bgcolor=ACC, color=ft.Colors.WHITE)
@@ -136,6 +138,7 @@ def main(page: ft.Page):
             "chk_skip": chk_skip.value,
             "chk_assets": chk_assets.value,
             "chk_md_only": chk_md_only.value,
+            "chk_annotate": chk_annotate.value,
             "syntax": ddl_syntax.value or "obsidian",
             "asset_dir": txt_asset.value or "attachment",
         })
@@ -261,6 +264,59 @@ def main(page: ft.Page):
                     pass
             threading.Thread(target=auto_close, daemon=True).start()
 
+    # -- annotation conversion dialog and post-processing ----
+    ANNOTATION_MAP = [
+        ("彩色文字", r'<font color="([^"]*)">(.*?)</font>', '<font color="\\1">\\2</font>', "保留为 <font>"),
+        ("粗体", r'<b>(.*?)</b>', '**\\1**', "→ **粗体**"),
+        ("斜体", r'<i>(.*?)</i>', '*\\1*', "→ *斜体*"),
+        ("删除线", r'<s>(.*?)</s>', '~~\\1~~', "→ ~~删除线~~"),
+        ("下划线", r'<u>(.*?)</u>', '<u>\\1</u>', "保留为 <u>"),
+        ("高亮", r'<span style="background-color:([^"]*)">(.*?)</span>', '==\\2==', "→ ==高亮=="),
+    ]
+
+    def _show_annotation_dialog(callback):
+        """Show dialog to choose which OneNote annotations to convert."""
+        switches = []
+        for label, pattern, repl, desc in ANNOTATION_MAP:
+            switches.append(ft.Switch(label=f"{label} {desc}", value=True))
+
+        def _confirm(e):
+            for sw, (label, pat, repl, desc) in zip(switches, ANNOTATION_MAP):
+                amap[label] = sw.value
+            page.pop_dialog()
+            page.update()
+            callback()
+
+        amap = {}
+        for label, _, _, _ in ANNOTATION_MAP:
+            amap[label] = True  # default: all on
+
+        dlg = ft.AlertDialog(
+            modal=True,
+            title=ft.Text("标注转换设置"),
+            content=ft.Column([
+                ft.Text("选择需要转换的 OneNote 标注类型：", size=14),
+                ft.Divider(),
+            ] + switches, spacing=8, scroll=ft.ScrollMode.AUTO),
+            actions=[
+                ft.Button(content=ft.Text("取消"), on_click=lambda e: (page.pop_dialog(), callback())),
+                ft.Button(content=ft.Text("确认"), on_click=_confirm,
+                          bgcolor=ACC, color=ft.Colors.WHITE),
+            ],
+            actions_alignment=ft.MainAxisAlignment.END,
+        )
+        page.show_dialog(dlg)
+        page.update()
+
+    def _apply_annotations(md_text: str, amap: dict) -> str:
+        """Apply selected annotation conversions to markdown text."""
+        for label in ("高亮", "彩色文字", "粗体", "斜体", "删除线", "下划线"):
+            if amap.get(label):
+                for lbl, pat, repl, _ in ANNOTATION_MAP:
+                    if lbl == label:
+                        md_text = re.sub(pat, repl, md_text, flags=re.DOTALL)
+        return md_text
+
     # -- pipeline (multi-file: PS for each .one, in-process for Markdown) --
     def run(_):
         nonlocal proc, running
@@ -284,142 +340,166 @@ def main(page: ft.Page):
             if not os.path.isfile(f):
                 snack(f"未找到: {f}"); return
 
-        running = True
-        log_lines.clear()
-        status_text.value = "处理中..."
-        status_text.color = ft.Colors.ORANGE_400
-        progress.value = None
-        progress.visible = True
-        for c in all_ctrls:
-            c.disabled = True
-        btn_run.disabled = True
-        btn_stop.visible = True
-        page.update()
+        def _start_convert():
+            nonlocal running
+            _do_convert()
 
-        log_lines.append(f"[{ts()}] 开始转换")
-        log_lines.append(f"文件数: {len(files)} ({len(ones)} one, {len(xmls)} xml)")
-        if not chk_skip.value:
-            log_lines.append(f"MD:   {mout_base}")
-            log_lines.append(f"语法: {ddl_syntax.value}")
-        log_lines.append("-" * 50)
+        if chk_annotate.value:
+            _show_annotation_dialog(_start_convert)
+            return
+        _do_convert()
 
-        show_log_dialog()
+        def _do_convert():
+            nonlocal proc, running
+            running = True
+            log_lines.clear()
+            status_text.value = "处理中..."
+            status_text.color = ft.Colors.ORANGE_400
+            progress.value = None
+            progress.visible = True
+            for c in all_ctrls:
+                c.disabled = True
+            btn_run.disabled = True
+            btn_stop.visible = True
+            page.update()
 
-        xml_script = str(ROOT / "Convert-OneNoteSectionToXml.ps1")
-        syntax = ddl_syntax.value or "obsidian"
-        # Shared resource directory — use relative path so all files point to mout_base/attachment/
-        asset_rel = f"../{adir}" if adir and "/" not in adir and "\\" not in adir else adir
+            log_lines.append(f"[{ts()}] 开始转换")
+            log_lines.append(f"文件数: {len(files)} ({len(ones)} one, {len(xmls)} xml)")
+            if not chk_skip.value:
+                log_lines.append(f"MD:   {mout_base}")
+                log_lines.append(f"语法: {ddl_syntax.value}")
+            log_lines.append("-" * 50)
 
-        def worker():
-            nonlocal proc
-            code = 0
-            total_md = 0
-            ext_imgs = 0
-            pl_imgs = 0
-            try:
-                sys.path.insert(0, str(ROOT))
-                import convert_onenote_xml as converter
+            show_log_dialog()
 
-                # ── Process each .one file ──
-                for one_path in ones:
-                    stem = Path(one_path).stem
-                    xout = Path(xout_base) / stem
-                    mout = Path(mout_base) / stem
+            xml_script = str(ROOT / "Convert-OneNoteSectionToXml.ps1")
+            syntax = ddl_syntax.value or "obsidian"
+            asset_rel = f"../{adir}" if adir and "/" not in adir and "\\" not in adir else adir
 
-                    log_lines.append(f"[{ts()}] .one → XML: {stem}")
-                    ps_args = [
-                        get_ps(), "-NoProfile", "-ExecutionPolicy", "Bypass",
-                        "-File", xml_script,
-                        "-InputOneFile", one_path,
-                        "-OutputDirectory", str(Path(xout_base)),
-                        "-LoadTimeoutSeconds", "30",
-                    ]
-                    if chk_empty.value:
-                        ps_args.append("-IncludeEmptyPages")
+            def worker():
+                nonlocal proc
+                code = 0
+                total_md = 0
+                ext_imgs = 0
+                pl_imgs = 0
+                try:
+                    sys.path.insert(0, str(ROOT))
+                    import convert_onenote_xml as converter
 
-                    p1 = subprocess.Popen(
-                        ps_args, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                        text=True, encoding="utf-8", errors="replace",
-                        cwd=str(ROOT),
-                        creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
-                    )
-                    proc = p1
-                    out1, err1 = p1.communicate(timeout=180)
-                    if out1:
-                        for line in out1.split("\n"):
-                            if line.strip():
-                                page.run_thread(_push_log, line.strip())
-                    if err1:
-                        for line in err1.split("\n"):
-                            if line.strip():
-                                page.run_thread(_push_log, f"[ERR] {line.strip()}")
-                    if p1.returncode != 0:
-                        log_lines.append(f"[ERR] {stem} XML 转换失败")
-                        code = max(code, p1.returncode)
-                        continue
+                    # ── Process each .one file ──
+                    for one_path in ones:
+                        stem = Path(one_path).stem
+                        xout_one = Path(xout_base) / stem
+                        mout_one = Path(mout_base) / stem
 
-                    if not chk_skip.value:
-                        xml_dir = Path(xout_base) / stem
-                        if xml_dir.exists():
-                            mout.mkdir(parents=True, exist_ok=True)
+                        log_lines.append(f"[{ts()}] .one → XML: {stem}")
+                        ps_args = [
+                            get_ps(), "-NoProfile", "-ExecutionPolicy", "Bypass",
+                            "-File", xml_script,
+                            "-InputOneFile", one_path,
+                            "-OutputDirectory", str(Path(xout_base)),
+                            "-LoadTimeoutSeconds", "30",
+                        ]
+                        if chk_empty.value:
+                            ps_args.append("-IncludeEmptyPages")
+
+                        p1 = subprocess.Popen(
+                            ps_args, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            text=True, encoding="utf-8", errors="replace",
+                            cwd=str(ROOT),
+                            creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
+                        )
+                        proc = p1
+                        out1, err1 = p1.communicate(timeout=180)
+                        if out1:
+                            for line in out1.split("\n"):
+                                if line.strip():
+                                    page.run_thread(_push_log, line.strip())
+                        if err1:
+                            for line in err1.split("\n"):
+                                if line.strip():
+                                    page.run_thread(_push_log, f"[ERR] {line.strip()}")
+                        if p1.returncode != 0:
+                            log_lines.append(f"[ERR] {stem} XML 转换失败")
+                            code = max(code, p1.returncode)
+                            continue
+
+                        if not chk_skip.value:
+                            xml_dir = Path(xout_base) / stem
+                            if xml_dir.exists():
+                                mout_one.mkdir(parents=True, exist_ok=True)
+                                written, resolver = converter.convert_path(
+                                    xml_input=xml_dir, output_dir=mout_one,
+                                    attachment_dir=None, sort_key="name",
+                                    recursive=True, image_syntax=syntax,
+                                    copy_attachments=chk_assets.value,
+                                    asset_dir_name=asset_rel,
+                                )
+                                total_md += len(written)
+                                ext_imgs += resolver.extracted_from_xml_count
+                                pl_imgs += resolver.placeholder_count
+                                log_lines.append(f"  {stem} → {len(written)} md")
+                                if chk_annotate.value:
+                                    for md_path in written:
+                                        try:
+                                            t = md_path.read_text(encoding="utf-8")
+                                            md_path.write_text(_apply_annotations(t), encoding="utf-8")
+                                        except Exception:
+                                            pass
+                                if chk_md_only.value:
+                                    try:
+                                        shutil.rmtree(xml_dir)
+                                    except Exception:
+                                        pass
+                            else:
+                                log_lines.append(f"[ERR] XML 目录不存在: {xml_dir}")
+
+                    # ── Process each .xml file ──
+                    for xml_path in xmls:
+                        if not chk_skip.value:
+                            log_lines.append(f"[{ts()}] XML → MD: {Path(xml_path).name}")
+                            mout_all = Path(mout_base)
+                            mout_all.mkdir(parents=True, exist_ok=True)
                             written, resolver = converter.convert_path(
-                                xml_input=xml_dir, output_dir=mout,
+                                xml_input=Path(xml_path), output_dir=mout_all,
                                 attachment_dir=None, sort_key="name",
-                                recursive=True, image_syntax=syntax,
+                                recursive=False, image_syntax=syntax,
                                 copy_attachments=chk_assets.value,
                                 asset_dir_name=asset_rel,
                             )
                             total_md += len(written)
                             ext_imgs += resolver.extracted_from_xml_count
                             pl_imgs += resolver.placeholder_count
-                            log_lines.append(f"  {stem} → {len(written)} md")
-                            if chk_md_only.value:
-                                try:
-                                    shutil.rmtree(xml_dir)
-                                except Exception:
-                                    pass
-                        else:
-                            log_lines.append(f"[ERR] XML 目录不存在: {xml_dir}")
+                            log_lines.append(f"  → {len(written)} md")
+                            if chk_annotate.value:
+                                for md_path in written:
+                                    try:
+                                        t = md_path.read_text(encoding="utf-8")
+                                        md_path.write_text(_apply_annotations(t), encoding="utf-8")
+                                    except Exception:
+                                        pass
 
-                # ── Process each .xml file ──
-                for xml_path in xmls:
+                    # Clean up XML base if chk_md_only
+                    if chk_md_only.value and chk_skip.value:
+                        try:
+                            shutil.rmtree(Path(xout_base))
+                            log_lines.append("  XML 已清理")
+                        except Exception:
+                            pass
+
                     if not chk_skip.value:
-                        log_lines.append(f"[{ts()}] XML → MD: {Path(xml_path).name}")
-                        mout = Path(mout_base)
-                        mout.mkdir(parents=True, exist_ok=True)
-                        written, resolver = converter.convert_path(
-                            xml_input=Path(xml_path), output_dir=mout,
-                            attachment_dir=None, sort_key="name",
-                            recursive=False, image_syntax=syntax,
-                            copy_attachments=chk_assets.value,
-                            asset_dir_name=asset_rel,
-                        )
-                        total_md += len(written)
-                        ext_imgs += resolver.extracted_from_xml_count
-                        pl_imgs += resolver.placeholder_count
-                        log_lines.append(f"  → {len(written)} md")
-
-                # Clean up XML base if chk_md_only
-                if chk_md_only.value and chk_skip.value:
-                    try:
-                        shutil.rmtree(Path(xout_base))
-                        log_lines.append("  XML 已清理")
-                    except Exception:
-                        pass
-
-                if not chk_skip.value:
-                    log_lines.append(f"  总计: {total_md} md 文件")
-                    if ext_imgs:
-                        log_lines.append(f"  提取图片: {ext_imgs}")
-                    if pl_imgs:
-                        log_lines.append(f"  占位图: {pl_imgs}")
-            except subprocess.TimeoutExpired:
-                log_lines.append("[ERR] 转换超时(180s)")
-                code = 1
-            except Exception as ex:
-                log_lines.append(f"[ERR] {ex}")
-                code = 1
-            page.run_thread(finish, code)
+                        log_lines.append(f"  总计: {total_md} md 文件")
+                        if ext_imgs:
+                            log_lines.append(f"  提取图片: {ext_imgs}")
+                        if pl_imgs:
+                            log_lines.append(f"  占位图: {pl_imgs}")
+                except subprocess.TimeoutExpired:
+                    log_lines.append("[ERR] 转换超时(180s)")
+                    code = 1
+                except Exception as ex:
+                    log_lines.append(f"[ERR] {ex}")
+                    code = 1
+                page.run_thread(finish, code)
 
         def finish(code: int):
             nonlocal running
@@ -460,7 +540,7 @@ def main(page: ft.Page):
     btn_stop.on_click = stop
 
     # Save settings on change
-    for ctrl in [txt_input, txt_xml, txt_md, chk_empty, chk_skip, chk_assets, chk_md_only, txt_asset]:
+    for ctrl in [txt_input, txt_xml, txt_md, chk_empty, chk_skip, chk_assets, chk_md_only, chk_annotate, txt_asset]:
         orig = ctrl.on_change
         def _wrap(c, o):
             c.on_change = lambda e: (save_settings(), o(e) if o else None)
@@ -512,6 +592,7 @@ def main(page: ft.Page):
                            alignment=ft.MainAxisAlignment.START),
                     chk_skip,
                     chk_md_only,
+                    chk_annotate,
                     ft.Divider(height=8),
                     ft.Row([ddl_syntax, txt_asset, ft.Container(expand=True)],
                            alignment=ft.MainAxisAlignment.START, spacing=16),

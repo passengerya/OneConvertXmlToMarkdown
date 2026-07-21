@@ -197,17 +197,26 @@ def split_circled_number_lines(text: str) -> list[str] | None:
     return parts
 
 
+FORMAT_TAGS = {"b", "i", "u", "s", "strong", "em", "code", "mark"}
+
 class RichTextHTMLParser(HTMLParser):
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
         self.parts: list[str] = []
+        self.tag_stack: list[str] = []      # open inline tags for proper nesting
         self.color_stack: list[str | None] = [None]
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        if tag.lower() == "br":
+        t = tag.lower()
+        if t == "br":
             self.parts.append("\n")
             return
-        if tag.lower() == "span":
+        if t in FORMAT_TAGS:
+            self.parts.append(f"<{t}>")
+            self.tag_stack.append(t)
+            self.color_stack.append(self.color_stack[-1])
+            return
+        if t == "span":
             color = self.color_stack[-1]
             style_map = {}
             for k, v in attrs:
@@ -218,13 +227,29 @@ class RichTextHTMLParser(HTMLParser):
                             style_map[kk.strip().lower()] = vv.strip()
             if "color" in style_map:
                 color = style_map["color"]
+            if "background-color" in style_map:
+                bg = style_map["background-color"]
+                self.parts.append(f'<span style="background-color:{bg}">')
+                self.tag_stack.append("span")
             self.color_stack.append(color)
             return
         self.color_stack.append(self.color_stack[-1])
 
     def handle_endtag(self, tag: str) -> None:
-        if self.color_stack:
-            self.color_stack.pop()
+        t = tag.lower()
+        if t in FORMAT_TAGS and self.tag_stack and self.tag_stack[-1] == t:
+            self.parts.append(f"</{t}>")
+            self.tag_stack.pop()
+            if self.color_stack:
+                self.color_stack.pop()
+        elif t == "span" and self.tag_stack and self.tag_stack[-1] == "span":
+            self.parts.append("</span>")
+            self.tag_stack.pop()
+            if self.color_stack:
+                self.color_stack.pop()
+        else:
+            if self.color_stack:
+                self.color_stack.pop()
         if not self.color_stack:
             self.color_stack = [None]
 
