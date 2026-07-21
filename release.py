@@ -27,12 +27,24 @@ def out(cmd: list[str]) -> str:
 
 
 def version_next() -> str:
-    # fetch remote tags so we see what's actually released
+    """Read the highest tag that exists on the REMOTE (only pushed tags count).
+    Falls back to local tags if network unreachable."""
     try:
         run(["git", "fetch", "--tags", "origin"], timeout=15, check=False)
     except Exception:
         pass
-    tags = [t.strip() for t in out(["git", "tag"]).split("\n") if t.strip()]
+    # Prefer remote tags
+    raw = out(["git", "ls-remote", "--tags", "origin"])
+    tags: list[str] = []
+    for line in raw.split("\n"):
+        if "refs/tags/" in line and "^{}" not in line:
+            t = line.strip().split("refs/tags/")[-1]
+            if t:
+                tags.append(t)
+    # Fallback to local tags if remote unreachable
+    if not tags:
+        local = [t.strip() for t in out(["git", "tag"]).split("\n") if t.strip()]
+        tags = local
     for t in sorted(tags, reverse=True):
         m = re.match(r"^v(\d+)\.(\d+)\.(\d+)$", t)
         if m:
@@ -86,7 +98,7 @@ def action_build():
 
 
 def action_release():
-    """Tag, commit, push, and create GitHub Release.  Fails if no exe exists."""
+    """Commit → push → tag (on success) → GitHub Release."""
     if not EXE.exists():
         sys.exit(f"  exe 不存在，请先选择 [1] 打包。\n  期望路径: {EXE}")
 
@@ -98,9 +110,9 @@ def action_release():
     for line in log.split("\n")[:15]:
         print(f"    {line}")
 
-    # Commit & tag
+    # Commit (no tag yet — tag only after successful push)
     print("\n" + "-" * 40)
-    print("  Git commit + tag")
+    print("  Git commit")
     print("-" * 40)
     run(["git", "add", "-A"])
     s = out(["git", "status", "--porcelain"])
@@ -108,21 +120,31 @@ def action_release():
         run(["git", "commit", "-m", f"release: {ver}"])
     else:
         print("  (nothing to commit)")
-    short = log.split("\n")[0][:80] if log else ver
-    run(["git", "tag", "-a", ver, "-m", short])
 
-    # Push
+    # Push HEAD
     print("\n" + "-" * 40)
-    print("  Push")
+    print("  Push HEAD")
     print("-" * 40)
-    pushed = True
     try:
         run(["git", "push", "origin", "HEAD"], timeout=30)
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        print("  !! push 失败 (网络不通)，版本号不递增。")
+        print(f"  修复网络后重试，仍为 {ver}")
+        return
+
+    # Push succeeded → create tag and push it
+    print("\n" + "-" * 40)
+    print("  Push tag")
+    print("-" * 40)
+    # Clean stale local tag from any previous failed push
+    subprocess.run(["git", "tag", "-d", ver], capture_output=True, cwd=str(ROOT))
+    short = log.split("\n")[0][:80] if log else ver
+    run(["git", "tag", "-a", ver, "-m", short])
+    try:
         run(["git", "push", "origin", ver], timeout=30)
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
-        print("  !! push 失败 (网络不通)")
-        print(f"  手动: git push origin HEAD && git push origin {ver}")
-        pushed = False
+        print(f"  !! tag push 失败，但 HEAD 已推送。手动: git push origin {ver}")
+        return
 
     # GitHub Release
     print("\n" + "-" * 40)
@@ -132,10 +154,6 @@ def action_release():
     if not gh:
         print("  gh CLI 未安装，跳过。")
         print(f"  手动: gh release create {ver} {EXE}")
-        return
-
-    if not pushed:
-        print(f"  push 未完成，跳过 Release。先 push 后再创建。")
         return
 
     try:
