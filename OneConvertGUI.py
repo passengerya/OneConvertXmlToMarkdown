@@ -139,8 +139,12 @@ def main(page: ft.Page):
         })
 
     def snack(msg: str):
-        page.show_dialog(ft.SnackBar(ft.Text(msg), action="关闭",
-                                     bgcolor=ft.Colors.ERROR_CONTAINER, open=True))
+        page.show_dialog(ft.SnackBar(
+            ft.Text(msg, color=ft.Colors.ON_ERROR_CONTAINER),
+            action="关闭",
+            bgcolor=ft.Colors.ERROR_CONTAINER,
+            action_color=ft.Colors.ON_ERROR_CONTAINER,
+            open=True))
 
     def _push_log(msg: str):
         log_lines.append(msg)
