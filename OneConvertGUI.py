@@ -102,7 +102,6 @@ def main(page: ft.Page):
     chk_empty  = ft.Checkbox(label="包含空页面", value=cfg.get("chk_empty", False))
     chk_skip   = ft.Checkbox(label="仅生成 XML（跳过 Markdown）", value=cfg.get("chk_skip", False))
     chk_assets = ft.Checkbox(label="复制图片资源", value=cfg.get("chk_assets", True))
-    chk_xml    = ft.Checkbox(label="输出 XML 文件", value=cfg.get("chk_xml", True))
     ddl_syntax = ft.Dropdown(
         label="图片语法",
         options=[ft.dropdown.Option("markdown"), ft.dropdown.Option("obsidian")],
@@ -118,7 +117,7 @@ def main(page: ft.Page):
     log_lines: list[str] = []
 
     md_ctrls = [ddl_syntax, chk_assets, txt_asset]
-    all_ctrls = [txt_input, txt_xml, txt_md, chk_empty, chk_skip, chk_assets, chk_xml,
+    all_ctrls = [txt_input, txt_xml, txt_md, chk_empty, chk_skip, chk_assets,
                  ddl_syntax, txt_asset]
 
     btn_run = ft.Button(content=ft.Text("开始转换"), icon=ft.Icons.PLAY_ARROW,
@@ -127,19 +126,6 @@ def main(page: ft.Page):
                          bgcolor=ft.Colors.TRANSPARENT)
 
     # -- helpers ----------------------------------------------------
-    btn_xml = ft.IconButton(
-        icon=ft.Icons.CODE,
-        icon_color=ACC if chk_xml.value else ft.Colors.SECONDARY,
-        tooltip="输出 XML" if chk_xml.value else "仅 Markdown",
-        on_click=lambda _: _toggle_xml())
-
-    def _toggle_xml():
-        chk_xml.value = not chk_xml.value
-        btn_xml.icon_color = ACC if chk_xml.value else ft.Colors.SECONDARY
-        btn_xml.tooltip = "输出 XML" if chk_xml.value else "仅 Markdown"
-        save_settings()
-        page.update()
-
     def save_settings():
         save_config({
             "input_file": txt_input.value or "",
@@ -148,7 +134,6 @@ def main(page: ft.Page):
             "chk_empty": chk_empty.value,
             "chk_skip": chk_skip.value,
             "chk_assets": chk_assets.value,
-            "chk_xml": chk_xml.value,
             "syntax": ddl_syntax.value or "obsidian",
             "asset_dir": txt_asset.value or "attachment",
         })
@@ -300,8 +285,6 @@ def main(page: ft.Page):
 
         log_lines.append(f"[{ts()}] 开始转换")
         log_lines.append(f"输入: {inp}")
-        if not is_xml:
-            log_lines.append(f"输出XML:  {chk_xml.value}")
         if chk_skip.value:
             log_lines.append("Markdown: 跳过")
         else:
@@ -433,7 +416,7 @@ def main(page: ft.Page):
     btn_stop.on_click = stop
 
     # Save settings on change
-    for ctrl in [txt_input, txt_xml, txt_md, chk_empty, chk_skip, chk_assets, chk_xml, txt_asset]:
+    for ctrl in [txt_input, txt_xml, txt_md, chk_empty, chk_skip, chk_assets, txt_asset]:
         orig = ctrl.on_change
         def _wrap(c, o):
             c.on_change = lambda e: (save_settings(), o(e) if o else None)
@@ -456,7 +439,6 @@ def main(page: ft.Page):
                                 color=ft.Colors.SECONDARY),
                     ], spacing=2),
                     ft.Container(expand=True),
-                    btn_xml,
                     ft.IconButton(icon=ft.Icons.BRIGHTNESS_4_OUTLINED, tooltip="切换主题", on_click=toggle_theme),
                     ft.IconButton(icon=ft.Icons.INFO_OUTLINED, tooltip="关于", on_click=show_about),
                 ]),
