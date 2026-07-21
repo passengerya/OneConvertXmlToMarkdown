@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """OneConvert Pipeline - Flet Desktop GUI (.one -> XML -> Markdown)"""
 
-import json, os, shutil, subprocess, sys, threading, winreg
+import json, os, re, shutil, subprocess, sys, threading, winreg
 from pathlib import Path
 from datetime import datetime
 
