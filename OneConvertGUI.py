@@ -283,7 +283,7 @@ def main(page: ft.Page):
         ("<font>彩色</font>", "<font>"),
     ]
 
-    def _scan_annotations() -> list[str]:
+    def _scan_annotations(files: list) -> list[str]:
         """Scan input files for OneNote formatting types. Return list of found labels."""
         found = set()
         for f in files:
@@ -296,9 +296,9 @@ def main(page: ft.Page):
                 pass
         return [l for l, _ in ONENOTE_PATTERNS if l in found]
 
-    def _show_annotation_dialog(callback):
+    def _show_annotation_dialog(files: list, callback):
         """Show dialog: for each found OneNote type, pick an Obsidian target."""
-        found = _scan_annotations()
+        found = _scan_annotations(files)
         if not found:
             snack("未检测到 OneNote 标注类型")
             callback()
@@ -552,7 +552,7 @@ def main(page: ft.Page):
             threading.Thread(target=worker, daemon=True).start()
 
         if chk_annotate.value:
-            _show_annotation_dialog(lambda: _start())
+            _show_annotation_dialog(files, lambda: _start())
             return
         _start()
 
