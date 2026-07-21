@@ -283,11 +283,17 @@ def main(page: ft.Page):
         ("<font>彩色</font>", "<font>"),
     ]
 
-    def _show_annotation_dialog(callback):
-        """Show dialog: every OneNote type → pick Obsidian target."""
+    def _show_annotation_dialog(callback, found: list[str] | None = None):
+        """Show dialog: detected OneNote types → pick Obsidian target.
+        If found is None, show all types. Otherwise only detected ones."""
+        if found is not None and not found:
+            callback()  # nothing detected, skip dialog
+            return
+
         dd_map: dict[str, ft.Dropdown] = {}
         rows = []
-        for label, _, _ in ANNOTATION_TYPES:
+        types_to_show = found if found is not None else [l for l, _, _ in ANNOTATION_TYPES]
+        for label in types_to_show:
             dd = ft.Dropdown(
                 options=[ft.dropdown.Option(n) for n, _ in OBSIDIAN_TARGETS],
                 value="不转换", width=170, dense=True,
@@ -320,7 +326,7 @@ def main(page: ft.Page):
             modal=True,
             title=ft.Text("标注转换设置"),
             content=ft.Column([
-                ft.Text("OneNote 标注 → Obsidian 格式：", size=13),
+                ft.Text("检测到以下 OneNote 标注 → Obsidian 格式：", size=13),
                 ft.Divider(),
             ] + rows, spacing=6, scroll=ft.ScrollMode.AUTO),
             actions=[
@@ -396,6 +402,7 @@ def main(page: ft.Page):
             def worker():
                 nonlocal proc
                 code = 0; total_md = 0; ext_imgs = 0; pl_imgs = 0
+                all_written: list[Path] = []
                 try:
                     sys.path.insert(0, str(ROOT))
                     import convert_onenote_xml as converter
@@ -445,12 +452,7 @@ def main(page: ft.Page):
                                 ext_imgs += resolver.extracted_from_xml_count
                                 pl_imgs += resolver.placeholder_count
                                 log_lines.append(f"  {stem} -> {len(written)} md")
-                                if chk_annotate.value:
-                                    for md_path in written:
-                                        try:
-                                            t = md_path.read_text(encoding="utf-8")
-                                            md_path.write_text(_apply_annotations(t), encoding="utf-8")
-                                        except Exception: pass
+                                all_written.extend(written)
                                 if chk_md_only.value:
                                     try: shutil.rmtree(xml_dir)
                                     except Exception: pass
@@ -473,12 +475,7 @@ def main(page: ft.Page):
                             ext_imgs += resolver.extracted_from_xml_count
                             pl_imgs += resolver.placeholder_count
                             log_lines.append(f"  -> {len(written)} md")
-                            if chk_annotate.value:
-                                for md_path in written:
-                                    try:
-                                        t = md_path.read_text(encoding="utf-8")
-                                        md_path.write_text(_apply_annotations(t), encoding="utf-8")
-                                    except Exception: pass
+                            all_written.extend(written)
 
                     if chk_md_only.value and chk_skip.value:
                         try:
@@ -495,7 +492,34 @@ def main(page: ft.Page):
                 except Exception as ex:
                     log_lines.append(f"[ERR] {ex}")
                     code = 1
-                page.run_thread(finish, code)
+
+                if chk_annotate.value and all_written:
+                    # Scan generated .md files for annotation types
+                    found = set()
+                    for md_path in all_written:
+                        try:
+                            t = md_path.read_text(encoding="utf-8", errors="replace")
+                            for label, open_pat, _ in ANNOTATION_TYPES:
+                                if re.search(open_pat, t) and label not in found:
+                                    found.add(label)
+                        except Exception:
+                            pass
+                    found_list = sorted(found, key=lambda x: [l for l, _, _ in ANNOTATION_TYPES].index(x))
+                    log_lines.append(f"  检测到标注: {', '.join(found_list) if found_list else '无'}")
+                    if found_list:
+                        def _apply_and_finish():
+                            for md_path in all_written:
+                                try:
+                                    t = md_path.read_text(encoding="utf-8")
+                                    md_path.write_text(_apply_annotations(t), encoding="utf-8")
+                                except Exception:
+                                    pass
+                            page.run_thread(finish, code)
+                        page.run_thread(lambda: _show_annotation_dialog(_apply_and_finish, found_list))
+                    else:
+                        page.run_thread(finish, code)
+                else:
+                    page.run_thread(finish, code)
 
             def finish(c: int):
                 nonlocal running
@@ -519,9 +543,6 @@ def main(page: ft.Page):
 
             threading.Thread(target=worker, daemon=True).start()
 
-        if chk_annotate.value:
-            _show_annotation_dialog(lambda: _start())
-            return
         _start()
 
     def stop(_):
