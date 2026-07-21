@@ -143,7 +143,6 @@ def main(page: ft.Page):
             ft.Text(msg, color=ft.Colors.ON_ERROR_CONTAINER),
             action="关闭",
             bgcolor=ft.Colors.ERROR_CONTAINER,
-            action_color=ft.Colors.ON_ERROR_CONTAINER,
             open=True))
 
     def _push_log(msg: str):
