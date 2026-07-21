@@ -86,7 +86,7 @@ def main(page: ft.Page):
     txt_input = ft.TextField(
         label="输入文件 (.one / .xml)", hint_text="可多选，以 ; 分隔",
         expand=True, icon=ft.Icons.DESIGN_SERVICES_OUTLINED, dense=True,
-        value=cfg.get("input_file", ""),
+        value="",
     )
     txt_xml = ft.TextField(
         label="XML 输出目录",
@@ -131,7 +131,6 @@ def main(page: ft.Page):
     # -- helpers ----------------------------------------------------
     def save_settings():
         save_config({
-            "input_file": txt_input.value or "",
             "xml_dir": txt_xml.value or "",
             "md_dir": txt_md.value or "",
             "chk_empty": chk_empty.value,
@@ -264,42 +263,90 @@ def main(page: ft.Page):
                     pass
             threading.Thread(target=auto_close, daemon=True).start()
 
-    # -- annotation conversion dialog and post-processing ----
-    ANNOTATION_MAP = [
-        ("彩色文字", r'<font color="([^"]*)">(.*?)</font>', '<font color="\\1">\\2</font>', "保留为 <font>"),
-        ("粗体", r'<b>(.*?)</b>', '**\\1**', "→ **粗体**"),
-        ("斜体", r'<i>(.*?)</i>', '*\\1*', "→ *斜体*"),
-        ("删除线", r'<s>(.*?)</s>', '~~\\1~~', "→ ~~删除线~~"),
-        ("下划线", r'<u>(.*?)</u>', '<u>\\1</u>', "保留为 <u>"),
-        ("高亮", r'<span style="background-color:([^"]*)">(.*?)</span>', '==\\2==', "→ ==高亮=="),
+    # -- annotation conversion: detect + free-form mapping ---
+    ONENOTE_PATTERNS = [
+        ("彩色文字", r'<font color="[^"]*">[^<]*</font>'),
+        ("粗体",      r'<b>[^<]*</b>'),
+        ("斜体",      r'<i>[^<]*</i>'),
+        ("删除线",    r'<s>[^<]*</s>'),
+        ("下划线",    r'<u>[^<]*</u>'),
+        ("高亮",      r'<span style="background-color:[^"]*">[^<]*</span>'),
+    ]
+    OBSIDIAN_TARGETS = [
+        ("保留原样", ""),
+        ("**粗体**", "**"),
+        ("*斜体*",   "*"),
+        ("~~删除线~~", "~~"),
+        ("==高亮==", "=="),
+        ("`行内代码`", "`"),
+        ("<u>下划线</u>", "<u>"),
+        ("<font>彩色</font>", "<font>"),
     ]
 
+    def _scan_annotations() -> list[str]:
+        """Scan input files for OneNote formatting types. Return list of found labels."""
+        found = set()
+        for f in files:
+            try:
+                text = Path(f).read_text(encoding="utf-8", errors="replace")
+                for label, pat in ONENOTE_PATTERNS:
+                    if re.search(pat, text, re.DOTALL):
+                        found.add(label)
+            except Exception:
+                pass
+        return [l for l, _ in ONENOTE_PATTERNS if l in found]
+
     def _show_annotation_dialog(callback):
-        """Show dialog to choose which OneNote annotations to convert."""
-        switches = []
-        for label, pattern, repl, desc in ANNOTATION_MAP:
-            switches.append(ft.Switch(label=f"{label} {desc}", value=True))
+        """Show dialog: for each found OneNote type, pick an Obsidian target."""
+        found = _scan_annotations()
+        if not found:
+            snack("未检测到 OneNote 标注类型")
+            callback()
+            return
+
+        # Build mapping state: {label: dropdown}
+        dd_map: dict[str, ft.Dropdown] = {}
+        rows = []
+        for label in found:
+            dd = ft.Dropdown(
+                label=label,
+                options=[ft.dropdown.Option(name) for name, _ in OBSIDIAN_TARGETS],
+                value="保留原样",
+                width=180, dense=True,
+            )
+            dd_map[label] = dd
+            rows.append(ft.Row([
+                ft.Text(f"OneNote: {label}", size=13, width=100),
+                ft.Text("→", size=13),
+                dd,
+            ], spacing=8))
 
         def _confirm(e):
-            for sw, (label, pat, repl, desc) in zip(switches, ANNOTATION_MAP):
-                amap[label] = sw.value
+            nonlocal amap
+            amap = {}
+            for label, dd in dd_map.items():
+                sel = dd.value
+                if not sel or sel == "保留原样":
+                    continue
+                for t_name, t_marker in OBSIDIAN_TARGETS:
+                    if t_name == sel and t_marker:
+                        amap[label] = t_marker
+                        break
             page.pop_dialog()
             page.update()
             callback()
 
-        amap = {}
-        for label, _, _, _ in ANNOTATION_MAP:
-            amap[label] = True  # default: all on
+        amap: dict[str, str] = {}
 
         dlg = ft.AlertDialog(
             modal=True,
-            title=ft.Text("标注转换设置"),
+            title=ft.Text("标注转换映射"),
             content=ft.Column([
-                ft.Text("选择需要转换的 OneNote 标注类型：", size=14),
+                ft.Text("检测到以下 OneNote 标注，选择目标 Obsidian 格式：", size=13),
                 ft.Divider(),
-            ] + switches, spacing=8, scroll=ft.ScrollMode.AUTO),
+            ] + rows, spacing=8, scroll=ft.ScrollMode.AUTO),
             actions=[
-                ft.Button(content=ft.Text("取消"), on_click=lambda e: (page.pop_dialog(), callback())),
+                ft.Button(content=ft.Text("跳过"), on_click=lambda e: (page.pop_dialog(), callback())),
                 ft.Button(content=ft.Text("确认"), on_click=_confirm,
                           bgcolor=ACC, color=ft.Colors.WHITE),
             ],
@@ -309,12 +356,24 @@ def main(page: ft.Page):
         page.update()
 
     def _apply_annotations(md_text: str, amap: dict) -> str:
-        """Apply selected annotation conversions to markdown text."""
-        for label in ("高亮", "彩色文字", "粗体", "斜体", "删除线", "下划线"):
-            if amap.get(label):
-                for lbl, pat, repl, _ in ANNOTATION_MAP:
-                    if lbl == label:
-                        md_text = re.sub(pat, repl, md_text, flags=re.DOTALL)
+        """Apply user-selected annotation mappings to markdown text."""
+        it = [
+            ("彩色文字", r'<font color="[^"]*">', r'</font>'),
+            ("粗体",      r'<b>', r'</b>'),
+            ("斜体",      r'<i>', r'</i>'),
+            ("删除线",    r'<s>', r'</s>'),
+            ("下划线",    r'<u>', r'</u>'),
+            ("高亮",      r'<span style="background-color:[^"]*">', r'</span>'),
+        ]
+        for label, open_pat, close_pat in it:
+            marker = amap.get(label)
+            if not marker:
+                continue
+            if marker == "<font>":
+                continue  # keep as-is
+            md_text = re.sub(open_pat + r'(.*?)' + close_pat,
+                             marker + r'\1' + marker,
+                             md_text, flags=re.DOTALL)
         return md_text
 
     # -- pipeline (multi-file: PS for each .one, in-process for Markdown) --
@@ -331,7 +390,6 @@ def main(page: ft.Page):
         if not in_raw:           snack("请选择 .one 或 .xml 文件"); return
         if not chk_assets.value and not adir: snack("资源目录名不能为空"); return
 
-        # Parse input
         files = [p.strip() for p in in_raw.split(";") if p.strip()]
         ones = [f for f in files if f.lower().endswith(".one")]
         xmls = [f for f in files if f.lower().endswith(".xml")]
@@ -340,16 +398,7 @@ def main(page: ft.Page):
             if not os.path.isfile(f):
                 snack(f"未找到: {f}"); return
 
-        def _start_convert():
-            nonlocal running
-            _do_convert()
-
-        if chk_annotate.value:
-            _show_annotation_dialog(_start_convert)
-            return
-        _do_convert()
-
-        def _do_convert():
+        def _start():
             nonlocal proc, running
             running = True
             log_lines.clear()
@@ -378,21 +427,15 @@ def main(page: ft.Page):
 
             def worker():
                 nonlocal proc
-                code = 0
-                total_md = 0
-                ext_imgs = 0
-                pl_imgs = 0
+                code = 0; total_md = 0; ext_imgs = 0; pl_imgs = 0
                 try:
                     sys.path.insert(0, str(ROOT))
                     import convert_onenote_xml as converter
 
-                    # ── Process each .one file ──
                     for one_path in ones:
                         stem = Path(one_path).stem
-                        xout_one = Path(xout_base) / stem
                         mout_one = Path(mout_base) / stem
-
-                        log_lines.append(f"[{ts()}] .one → XML: {stem}")
+                        log_lines.append(f"[{ts()}] .one -> XML: {stem}")
                         ps_args = [
                             get_ps(), "-NoProfile", "-ExecutionPolicy", "Bypass",
                             "-File", xml_script,
@@ -402,28 +445,23 @@ def main(page: ft.Page):
                         ]
                         if chk_empty.value:
                             ps_args.append("-IncludeEmptyPages")
-
                         p1 = subprocess.Popen(
                             ps_args, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                            text=True, encoding="utf-8", errors="replace",
-                            cwd=str(ROOT),
+                            text=True, encoding="utf-8", errors="replace", cwd=str(ROOT),
                             creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
                         )
                         proc = p1
                         out1, err1 = p1.communicate(timeout=180)
                         if out1:
                             for line in out1.split("\n"):
-                                if line.strip():
-                                    page.run_thread(_push_log, line.strip())
+                                if line.strip(): page.run_thread(_push_log, line.strip())
                         if err1:
                             for line in err1.split("\n"):
-                                if line.strip():
-                                    page.run_thread(_push_log, f"[ERR] {line.strip()}")
+                                if line.strip(): page.run_thread(_push_log, f"[ERR] {line.strip()}")
                         if p1.returncode != 0:
                             log_lines.append(f"[ERR] {stem} XML 转换失败")
                             code = max(code, p1.returncode)
                             continue
-
                         if not chk_skip.value:
                             xml_dir = Path(xout_base) / stem
                             if xml_dir.exists():
@@ -438,26 +476,22 @@ def main(page: ft.Page):
                                 total_md += len(written)
                                 ext_imgs += resolver.extracted_from_xml_count
                                 pl_imgs += resolver.placeholder_count
-                                log_lines.append(f"  {stem} → {len(written)} md")
+                                log_lines.append(f"  {stem} -> {len(written)} md")
                                 if chk_annotate.value:
                                     for md_path in written:
                                         try:
                                             t = md_path.read_text(encoding="utf-8")
                                             md_path.write_text(_apply_annotations(t), encoding="utf-8")
-                                        except Exception:
-                                            pass
+                                        except Exception: pass
                                 if chk_md_only.value:
-                                    try:
-                                        shutil.rmtree(xml_dir)
-                                    except Exception:
-                                        pass
+                                    try: shutil.rmtree(xml_dir)
+                                    except Exception: pass
                             else:
                                 log_lines.append(f"[ERR] XML 目录不存在: {xml_dir}")
 
-                    # ── Process each .xml file ──
                     for xml_path in xmls:
                         if not chk_skip.value:
-                            log_lines.append(f"[{ts()}] XML → MD: {Path(xml_path).name}")
+                            log_lines.append(f"[{ts()}] XML -> MD: {Path(xml_path).name}")
                             mout_all = Path(mout_base)
                             mout_all.mkdir(parents=True, exist_ok=True)
                             written, resolver = converter.convert_path(
@@ -470,29 +504,23 @@ def main(page: ft.Page):
                             total_md += len(written)
                             ext_imgs += resolver.extracted_from_xml_count
                             pl_imgs += resolver.placeholder_count
-                            log_lines.append(f"  → {len(written)} md")
+                            log_lines.append(f"  -> {len(written)} md")
                             if chk_annotate.value:
                                 for md_path in written:
                                     try:
                                         t = md_path.read_text(encoding="utf-8")
                                         md_path.write_text(_apply_annotations(t), encoding="utf-8")
-                                    except Exception:
-                                        pass
+                                    except Exception: pass
 
-                    # Clean up XML base if chk_md_only
                     if chk_md_only.value and chk_skip.value:
                         try:
                             shutil.rmtree(Path(xout_base))
                             log_lines.append("  XML 已清理")
-                        except Exception:
-                            pass
-
+                        except Exception: pass
                     if not chk_skip.value:
                         log_lines.append(f"  总计: {total_md} md 文件")
-                        if ext_imgs:
-                            log_lines.append(f"  提取图片: {ext_imgs}")
-                        if pl_imgs:
-                            log_lines.append(f"  占位图: {pl_imgs}")
+                        if ext_imgs: log_lines.append(f"  提取图片: {ext_imgs}")
+                        if pl_imgs: log_lines.append(f"  占位图: {pl_imgs}")
                 except subprocess.TimeoutExpired:
                     log_lines.append("[ERR] 转换超时(180s)")
                     code = 1
@@ -501,30 +529,32 @@ def main(page: ft.Page):
                     code = 1
                 page.run_thread(finish, code)
 
-        def finish(code: int):
-            nonlocal running
-            running = False
-            btn_run.disabled = False
-            btn_stop.visible = False
-            if code == 0:
-                status_text.value = "已完成"
-                status_text.color = ft.Colors.GREEN_400
-                progress.value = 1.0
-                progress.color = ft.Colors.GREEN_300
-            else:
-                status_text.value = f"失败 (code={code})"
-                status_text.color = ft.Colors.ERROR
-                progress.value = 0
-                progress.color = ft.Colors.ERROR
-                log_lines.append("-" * 50)
-                log_lines.append(f"[{ts()}] 结束, 退出码: {code}")
-                show_log_dialog(is_error=True)
-            for c in all_ctrls:
-                c.disabled = False
-            on_skip(None)
-            page.update()
+            def finish(c: int):
+                nonlocal running
+                running = False
+                btn_run.disabled = False
+                btn_stop.visible = False
+                if c == 0:
+                    status_text.value = "已完成"
+                    status_text.color = ft.Colors.GREEN_400
+                    progress.value = 1.0; progress.color = ft.Colors.GREEN_300
+                else:
+                    status_text.value = f"失败 (code={c})"
+                    status_text.color = ft.Colors.ERROR
+                    progress.value = 0; progress.color = ft.Colors.ERROR
+                    log_lines.append("-" * 50)
+                    log_lines.append(f"[{ts()}] 结束, 退出码: {c}")
+                    show_log_dialog(is_error=True)
+                for ctrl in all_ctrls: ctrl.disabled = False
+                on_skip(None)
+                page.update()
 
-        threading.Thread(target=worker, daemon=True).start()
+            threading.Thread(target=worker, daemon=True).start()
+
+        if chk_annotate.value:
+            _show_annotation_dialog(lambda: _start())
+            return
+        _start()
 
     def stop(_):
         nonlocal proc
