@@ -102,6 +102,7 @@ def main(page: ft.Page):
     chk_empty  = ft.Checkbox(label="包含空页面", value=cfg.get("chk_empty", False))
     chk_skip   = ft.Checkbox(label="仅生成 XML（跳过 Markdown）", value=cfg.get("chk_skip", False))
     chk_assets = ft.Checkbox(label="复制图片资源", value=cfg.get("chk_assets", True))
+    chk_md_only = ft.Checkbox(label="仅生成 Markdown（不保留 XML）", value=cfg.get("chk_md_only", False))
     ddl_syntax = ft.Dropdown(
         label="图片语法",
         options=[ft.dropdown.Option("markdown"), ft.dropdown.Option("obsidian")],
@@ -117,7 +118,7 @@ def main(page: ft.Page):
     log_lines: list[str] = []
 
     md_ctrls = [ddl_syntax, chk_assets, txt_asset]
-    all_ctrls = [txt_input, txt_xml, txt_md, chk_empty, chk_skip, chk_assets,
+    all_ctrls = [txt_input, txt_xml, txt_md, chk_empty, chk_skip, chk_assets, chk_md_only,
                  ddl_syntax, txt_asset]
 
     btn_run = ft.Button(content=ft.Text("开始转换"), icon=ft.Icons.PLAY_ARROW,
@@ -134,6 +135,7 @@ def main(page: ft.Page):
             "chk_empty": chk_empty.value,
             "chk_skip": chk_skip.value,
             "chk_assets": chk_assets.value,
+            "chk_md_only": chk_md_only.value,
             "syntax": ddl_syntax.value or "obsidian",
             "asset_dir": txt_asset.value or "attachment",
         })
@@ -344,7 +346,7 @@ def main(page: ft.Page):
                     out_dir = Path(mout)
                     out_dir.mkdir(parents=True, exist_ok=True)
                     if is_xml:
-                        xml_dir = Path(inp).parent  # directory containing the XML file(s)
+                        xml_dir = Path(inp)  # single XML file, not directory
                     else:
                         xml_dir = Path(xout) / Path(inp).stem
                     if xml_dir.exists():
@@ -363,6 +365,13 @@ def main(page: ft.Page):
                             log_lines.append(f"  占位图: {resolver.placeholder_count}")
                         if resolver.extracted_from_xml_count:
                             log_lines.append(f"  提取图片: {resolver.extracted_from_xml_count}")
+                        # Clean up XML if only Markdown is requested
+                        if chk_md_only.value and is_one:
+                            try:
+                                shutil.rmtree(xml_dir)
+                                log_lines.append("  XML 临时文件已清理")
+                            except Exception:
+                                pass
                     else:
                         log_lines.append(f"[ERR] XML 目录不存在: {xml_dir}")
                         page.run_thread(finish, 1)
@@ -416,7 +425,7 @@ def main(page: ft.Page):
     btn_stop.on_click = stop
 
     # Save settings on change
-    for ctrl in [txt_input, txt_xml, txt_md, chk_empty, chk_skip, chk_assets, txt_asset]:
+    for ctrl in [txt_input, txt_xml, txt_md, chk_empty, chk_skip, chk_assets, chk_md_only, txt_asset]:
         orig = ctrl.on_change
         def _wrap(c, o):
             c.on_change = lambda e: (save_settings(), o(e) if o else None)
@@ -467,6 +476,7 @@ def main(page: ft.Page):
                     ft.Row([chk_empty, chk_assets, ft.Container(expand=True)],
                            alignment=ft.MainAxisAlignment.START),
                     chk_skip,
+                    chk_md_only,
                     ft.Divider(height=8),
                     ft.Row([ddl_syntax, txt_asset, ft.Container(expand=True)],
                            alignment=ft.MainAxisAlignment.START, spacing=16),
