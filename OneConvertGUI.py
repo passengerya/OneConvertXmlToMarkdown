@@ -199,7 +199,7 @@ def main(page: ft.Page):
     def show_log_dialog(is_error: bool = False):
         """Show the conversion log in a dialog. Auto-close after 2s unless error."""
         log_content = ft.Column([], scroll=ft.ScrollMode.AUTO, expand=True)
-        for msg in log_lines[-200:]:  # show last 200 lines
+        for msg in log_lines[-200:]:
             c = ft.Colors.ERROR if "[ERR]" in msg else None
             log_content.controls.append(
                 ft.Text(msg, size=12, font_family="Consolas", selectable=True, color=c))
@@ -210,8 +210,17 @@ def main(page: ft.Page):
             except Exception:
                 pass
 
+        def _copy_log(e):
+            page.set_clipboard("\n".join(log_lines))
+            page.pop_dialog()
+            page.update()
+
         footer = ("转换失败，请查看上方错误信息" if is_error
                   else "此窗口将在 2 秒后自动关闭")
+        actions = [ft.Text(footer, size=12, color=ft.Colors.ERROR if is_error else ft.Colors.SECONDARY)]
+        if is_error:
+            actions.insert(0, ft.Button(content=ft.Text("复制日志"), icon=ft.Icons.COPY,
+                                          on_click=_copy_log, bgcolor=ACC, color=ft.Colors.WHITE))
         dialog = ft.AlertDialog(
             modal=True,
             title=ft.Row([
@@ -221,12 +230,12 @@ def main(page: ft.Page):
             content=ft.Container(
                 content=log_content,
                 width=700, height=400,
-                bgcolor=ft.Colors.SCRIM,
-                border=ft.Border.all(1, ft.Colors.OUTLINE_VARIANT),
+                bgcolor=ft.Colors.BLACK26 if page.theme_mode == ft.ThemeMode.DARK else ft.Colors.BLACK12,
+                border=ft.Border.all(1, ft.Colors.OUTLINE),
                 border_radius=8,
                 padding=12,
             ),
-            actions=[ft.Text(footer, size=12, color=ft.Colors.ERROR if is_error else ft.Colors.SECONDARY)],
+            actions=actions,
             actions_alignment=ft.MainAxisAlignment.CENTER,
         )
         page.show_dialog(dialog)
