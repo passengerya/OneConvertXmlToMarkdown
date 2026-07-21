@@ -264,14 +264,15 @@ def main(page: ft.Page):
             threading.Thread(target=auto_close, daemon=True).start()
 
     # -- annotation conversion: OneNote formatting → Obsidian ----
-    # Scan patterns match XML CDATA (span styles). Apply patterns match MD output (HTML tags).
-    ANNOTATION_TYPES = [
-        ("彩色文字", r'color:#[a-fA-F0-9]{3,6}',        r'<font color="[^"]*">', r'</font>'),
-        ("粗体",      r'font-weight:bold',                 r'<b>', r'</b>'),
-        ("斜体",      r'font-style:italic',               r'<i>', r'</i>'),
-        ("删除线",    r'text-decoration:line-through',    r'<s>', r'</s>'),
-        ("下划线",    r'text-decoration:underline',       r'<u>', r'</u>'),
-        ("高亮",      r'background:',                      r'<span style="background-color:[^"]*">', r'</span>'),
+    BINARY_TYPES = [  # on/off types — no color value
+        ("粗体",   r'font-weight:bold',              r'<b>', r'</b>'),
+        ("斜体",   r'font-style:italic',             r'<i>', r'</i>'),
+        ("删除线", r'text-decoration:line-through',  r'<s>', r'</s>'),
+        ("下划线", r'text-decoration:underline',     r'<u>', r'</u>'),
+    ]
+    COLOR_TYPES = [  # per-color types — scan extracts color values
+        ("彩色文字", r'color:(#[a-fA-F0-9]{3,6})',         r'<font color="\1">', r'</font>'),
+        ("彩色高亮", r'background(?:-color)?:(\S+?)[;"]',  r'<span style="background-color:\1">', r'</span>'),
     ]
     OBSIDIAN_TARGETS = [
         ("不转换", ""),
@@ -284,50 +285,79 @@ def main(page: ft.Page):
         ("<font>彩色</font>", "<font>"),
     ]
 
-    def _show_annotation_dialog(callback, found: list[str]):
-        """Show dialog: only detected OneNote types → pick Obsidian target."""
-        if not found:
+    def _scan_items(xml_dirs: list[Path]) -> list[tuple[str, str, str, str]]:
+        """Scan XML for annotation items. Returns [(label, color_value, open_pat, close_pat), ...]."""
+        items: list[tuple[str, str, str, str]] = []
+        seen: set[str] = set()
+        for xml_src in xml_dirs:
+            try:
+                fps = [xml_src] if xml_src.is_file() else list(xml_src.rglob("*.xml"))
+                for xf in fps:
+                    t = xf.read_text(encoding="utf-8", errors="replace")
+                    # Binary types
+                    for label, scan_pat, open_pat, close_pat in BINARY_TYPES:
+                        if re.search(scan_pat, t) and label not in seen:
+                            seen.add(label)
+                            items.append((label, "", open_pat, close_pat))
+                    # Per-color types
+                    for label, scan_pat, open_tmpl, close_pat in COLOR_TYPES:
+                        for m in re.finditer(scan_pat, t):
+                            val = m.group(1).strip().rstrip(";").strip('"').strip("'")
+                            key = f"{label}({val})"
+                            if key not in seen:
+                                seen.add(key)
+                                open_pat = open_tmpl.replace(r'\1', re.escape(val))
+                                items.append((key, val, open_pat, close_pat))
+            except Exception:
+                pass
+        return items
+
+    def _show_annotation_dialog(callback, items: list):
+        """Show per-item annotation mapping dialog."""
+        if not items:
             snack("未检测到任何标注类型（彩色、粗体、斜体、删除线、下划线、高亮）")
             callback()
             return
         dd_map: dict[str, ft.Dropdown] = {}
         rows = []
-        for label in found:
+        for label, val, open_pat, close_pat in items:
+            display = f"{label}  " if val else label
             dd = ft.Dropdown(
                 options=[ft.dropdown.Option(n) for n, _ in OBSIDIAN_TARGETS],
-                value="不转换", width=170, dense=True,
+                value="不转换", width=160, dense=True,
             )
             dd_map[label] = dd
+            color_hint = ft.Container(width=16, height=16, border_radius=8, bgcolor=val) if val else ft.Text("")
             rows.append(ft.Row([
-                ft.Text(label, size=13, width=80),
-                ft.Text("→", size=13),
+                color_hint,
+                ft.Text(display, size=12, width=160),
+                ft.Text("→", size=12),
                 dd,
-            ], spacing=8))
+            ], spacing=4))
 
         def _confirm(e):
-            nonlocal amap
-            amap = {}
+            result = {}
             for label, dd in dd_map.items():
                 sel = dd.value
                 if not sel or sel == "不转换":
                     continue
                 for t_name, t_marker in OBSIDIAN_TARGETS:
                     if t_name == sel and t_marker:
-                        amap[label] = t_marker
+                        result[label] = t_marker
                         break
             page.pop_dialog()
             page.update()
-            callback()
+            callback(result)
 
         amap: dict[str, str] = {}
 
         dlg = ft.AlertDialog(
             modal=True,
-            title=ft.Text("标注转换设置"),
+            title=ft.Text(f"标注转换设置 ({len(items)} 项)"),
             content=ft.Column([
-                ft.Text("检测到以下 OneNote 标注 → Obsidian 格式：", size=13),
+                ft.Text("检测到以下标注，选择目标格式：", size=13),
                 ft.Divider(),
-            ] + rows, spacing=6, scroll=ft.ScrollMode.AUTO),
+            ] + rows, spacing=4, scroll=ft.ScrollMode.AUTO),
             actions=[
                 ft.Button(content=ft.Text("跳过"), on_click=lambda e: (page.pop_dialog(), callback())),
                 ft.Button(content=ft.Text("确认"), on_click=_confirm,
@@ -338,9 +368,9 @@ def main(page: ft.Page):
         page.show_dialog(dlg)
         page.update()
 
-    def _apply_annotations(md_text: str, amap: dict) -> str:
-        """Apply user-selected annotation mappings to markdown text."""
-        for label, _, open_pat, close_pat in ANNOTATION_TYPES:
+    def _apply_annotations(md_text: str, amap: dict, items: list) -> str:
+        """Apply per-item annotation mappings."""
+        for label, val, open_pat, close_pat in items:
             marker = amap.get(label)
             if not marker or marker == "<font>":
                 continue
@@ -403,7 +433,7 @@ def main(page: ft.Page):
                 code = 0; total_md = 0; ext_imgs = 0; pl_imgs = 0
                 all_written: list[Path] = []
                 xml_dirs: list[Path] = []
-                found_list: list[str] = []
+                annot_items: list = []
                 try:
                     sys.path.insert(0, str(ROOT))
                     import convert_onenote_xml as converter
@@ -451,19 +481,8 @@ def main(page: ft.Page):
 
                     # ── Phase 2: scan XML for annotation types ──
                     if chk_annotate.value and xml_dirs:
-                        found = set()
-                        for xml_src in xml_dirs:
-                            try:
-                                fps = [xml_src] if xml_src.is_file() else list(xml_src.rglob("*.xml"))
-                                for xf in fps:
-                                    t = xf.read_text(encoding="utf-8", errors="replace")
-                                    for label, scan_pat, _, _ in ANNOTATION_TYPES:
-                                        if re.search(scan_pat, t) and label not in found:
-                                            found.add(label)
-                            except Exception:
-                                pass
-                        found_list = sorted(found, key=lambda x: [l for l, _, _, _ in ANNOTATION_TYPES].index(x))
-                        msg = f"检测到 {len(found_list)} 种标注: {', '.join(found_list)}" if found_list else "未检测到标注类型"
+                        annot_items = _scan_items(xml_dirs)
+                        msg = f"检测到 {len(annot_items)} 种标注" if annot_items else "未检测到标注类型"
                         log_lines.append(f"  {msg}")
                         status_text.value = msg
                         page.update()
@@ -521,15 +540,16 @@ def main(page: ft.Page):
 
                 # ── Phase 4: apply annotations ──
                 if chk_annotate.value:
-                    def _apply_and_finish():
-                        for md_path in all_written:
-                            try:
-                                t = md_path.read_text(encoding="utf-8")
-                                md_path.write_text(_apply_annotations(t), encoding="utf-8")
-                            except Exception:
-                                pass
+                    def _apply_and_finish(amap=None):
+                        if amap:
+                            for md_path in all_written:
+                                try:
+                                    t = md_path.read_text(encoding="utf-8")
+                                    md_path.write_text(_apply_annotations(t, amap, annot_items))
+                                except Exception:
+                                    pass
                         page.run_thread(finish, code)
-                    page.run_thread(lambda: _show_annotation_dialog(_apply_and_finish, found_list))
+                    page.run_thread(lambda: _show_annotation_dialog(_apply_and_finish, annot_items))
                 else:
                     page.run_thread(finish, code)
 
