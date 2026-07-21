@@ -227,10 +227,30 @@ class RichTextHTMLParser(HTMLParser):
                             style_map[kk.strip().lower()] = vv.strip()
             if "color" in style_map:
                 color = style_map["color"]
-            if "background-color" in style_map:
-                bg = style_map["background-color"]
+            # background → Obsidian ==highlight== marker
+            if "background-color" in style_map or "background" in style_map:
+                bg = style_map.get("background-color") or style_map.get("background", "")
                 self.parts.append(f'<span style="background-color:{bg}">')
                 self.tag_stack.append("span")
+            # font-weight:bold → <b>
+            fw = style_map.get("font-weight", "")
+            if fw and fw.strip().lower() in ("bold", "700", "800", "900"):
+                self.parts.append("<b>")
+                self.tag_stack.append("b")
+            # font-style:italic → <i>
+            fs = style_map.get("font-style", "")
+            if fs and fs.strip().lower() in ("italic", "oblique"):
+                self.parts.append("<i>")
+                self.tag_stack.append("i")
+            # text-decoration
+            td = style_map.get("text-decoration", "")
+            td_lower = td.strip().lower()
+            if "line-through" in td_lower:
+                self.parts.append("<s>")
+                self.tag_stack.append("s")
+            elif "underline" in td_lower:
+                self.parts.append("<u>")
+                self.tag_stack.append("u")
             self.color_stack.append(color)
             return
         self.color_stack.append(self.color_stack[-1])

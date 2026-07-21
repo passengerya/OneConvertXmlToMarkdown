@@ -264,13 +264,14 @@ def main(page: ft.Page):
             threading.Thread(target=auto_close, daemon=True).start()
 
     # -- annotation conversion: OneNote formatting → Obsidian ----
+    # Scan patterns match XML CDATA (span styles). Apply patterns match MD output (HTML tags).
     ANNOTATION_TYPES = [
-        ("彩色文字", r'<font color="[^"]*">', r'</font>'),
-        ("粗体",      r'<b>', r'</b>'),
-        ("斜体",      r'<i>', r'</i>'),
-        ("删除线",    r'<s>', r'</s>'),
-        ("下划线",    r'<u>', r'</u>'),
-        ("高亮",      r'<span style="background-color:[^"]*">', r'</span>'),
+        ("彩色文字", r'color:#[a-fA-F0-9]{3,6}',        r'<font color="[^"]*">', r'</font>'),
+        ("粗体",      r'font-weight:bold',                 r'<b>', r'</b>'),
+        ("斜体",      r'font-style:italic',               r'<i>', r'</i>'),
+        ("删除线",    r'text-decoration:line-through',    r'<s>', r'</s>'),
+        ("下划线",    r'text-decoration:underline',       r'<u>', r'</u>'),
+        ("高亮",      r'background:',                      r'<span style="background-color:[^"]*">', r'</span>'),
     ]
     OBSIDIAN_TARGETS = [
         ("不转换", ""),
@@ -339,7 +340,7 @@ def main(page: ft.Page):
 
     def _apply_annotations(md_text: str, amap: dict) -> str:
         """Apply user-selected annotation mappings to markdown text."""
-        for label, open_pat, close_pat in ANNOTATION_TYPES:
+        for label, _, open_pat, close_pat in ANNOTATION_TYPES:
             marker = amap.get(label)
             if not marker or marker == "<font>":
                 continue
@@ -456,12 +457,12 @@ def main(page: ft.Page):
                                 fps = [xml_src] if xml_src.is_file() else list(xml_src.rglob("*.xml"))
                                 for xf in fps:
                                     t = xf.read_text(encoding="utf-8", errors="replace")
-                                    for label, open_pat, _ in ANNOTATION_TYPES:
-                                        if re.search(open_pat, t) and label not in found:
+                                    for label, scan_pat, _, _ in ANNOTATION_TYPES:
+                                        if re.search(scan_pat, t) and label not in found:
                                             found.add(label)
                             except Exception:
                                 pass
-                        found_list = sorted(found, key=lambda x: [l for l, _, _ in ANNOTATION_TYPES].index(x))
+                        found_list = sorted(found, key=lambda x: [l for l, _, _, _ in ANNOTATION_TYPES].index(x))
                         msg = f"检测到 {len(found_list)} 种标注: {', '.join(found_list)}" if found_list else "未检测到标注类型"
                         log_lines.append(f"  {msg}")
                         status_text.value = msg
