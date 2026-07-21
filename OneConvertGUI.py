@@ -263,19 +263,19 @@ def main(page: ft.Page):
                     pass
             threading.Thread(target=auto_close, daemon=True).start()
 
-    # -- annotation conversion: detect + free-form mapping ---
-    ONENOTE_PATTERNS = [
-        ("彩色文字", r'<font color="[^"]*">[^<]*</font>'),
-        ("粗体",      r'<b>[^<]*</b>'),
-        ("斜体",      r'<i>[^<]*</i>'),
-        ("删除线",    r'<s>[^<]*</s>'),
-        ("下划线",    r'<u>[^<]*</u>'),
-        ("高亮",      r'<span style="background-color:[^"]*">[^<]*</span>'),
+    # -- annotation conversion: OneNote formatting → Obsidian ----
+    ANNOTATION_TYPES = [
+        ("彩色文字", r'<font color="[^"]*">', r'</font>'),
+        ("粗体",      r'<b>', r'</b>'),
+        ("斜体",      r'<i>', r'</i>'),
+        ("删除线",    r'<s>', r'</s>'),
+        ("下划线",    r'<u>', r'</u>'),
+        ("高亮",      r'<span style="background-color:[^"]*">', r'</span>'),
     ]
     OBSIDIAN_TARGETS = [
-        ("保留原样", ""),
+        ("不转换", ""),
         ("**粗体**", "**"),
-        ("*斜体*",   "*"),
+        ("*斜体*", "*"),
         ("~~删除线~~", "~~"),
         ("==高亮==", "=="),
         ("`行内代码`", "`"),
@@ -283,40 +283,18 @@ def main(page: ft.Page):
         ("<font>彩色</font>", "<font>"),
     ]
 
-    def _scan_annotations(files: list) -> list[str]:
-        """Scan input files for OneNote formatting types. Return list of found labels."""
-        found = set()
-        for f in files:
-            try:
-                text = Path(f).read_text(encoding="utf-8", errors="replace")
-                for label, pat in ONENOTE_PATTERNS:
-                    if re.search(pat, text, re.DOTALL):
-                        found.add(label)
-            except Exception:
-                pass
-        return [l for l, _ in ONENOTE_PATTERNS if l in found]
-
-    def _show_annotation_dialog(files: list, callback):
-        """Show dialog: for each found OneNote type, pick an Obsidian target."""
-        found = _scan_annotations(files)
-        if not found:
-            snack("未检测到 OneNote 标注类型")
-            callback()
-            return
-
-        # Build mapping state: {label: dropdown}
+    def _show_annotation_dialog(callback):
+        """Show dialog: every OneNote type → pick Obsidian target."""
         dd_map: dict[str, ft.Dropdown] = {}
         rows = []
-        for label in found:
+        for label, _, _ in ANNOTATION_TYPES:
             dd = ft.Dropdown(
-                label=label,
-                options=[ft.dropdown.Option(name) for name, _ in OBSIDIAN_TARGETS],
-                value="保留原样",
-                width=180, dense=True,
+                options=[ft.dropdown.Option(n) for n, _ in OBSIDIAN_TARGETS],
+                value="不转换", width=170, dense=True,
             )
             dd_map[label] = dd
             rows.append(ft.Row([
-                ft.Text(f"OneNote: {label}", size=13, width=100),
+                ft.Text(label, size=13, width=80),
                 ft.Text("→", size=13),
                 dd,
             ], spacing=8))
@@ -326,7 +304,7 @@ def main(page: ft.Page):
             amap = {}
             for label, dd in dd_map.items():
                 sel = dd.value
-                if not sel or sel == "保留原样":
+                if not sel or sel == "不转换":
                     continue
                 for t_name, t_marker in OBSIDIAN_TARGETS:
                     if t_name == sel and t_marker:
@@ -340,11 +318,11 @@ def main(page: ft.Page):
 
         dlg = ft.AlertDialog(
             modal=True,
-            title=ft.Text("标注转换映射"),
+            title=ft.Text("标注转换设置"),
             content=ft.Column([
-                ft.Text("检测到以下 OneNote 标注，选择目标 Obsidian 格式：", size=13),
+                ft.Text("OneNote 标注 → Obsidian 格式：", size=13),
                 ft.Divider(),
-            ] + rows, spacing=8, scroll=ft.ScrollMode.AUTO),
+            ] + rows, spacing=6, scroll=ft.ScrollMode.AUTO),
             actions=[
                 ft.Button(content=ft.Text("跳过"), on_click=lambda e: (page.pop_dialog(), callback())),
                 ft.Button(content=ft.Text("确认"), on_click=_confirm,
@@ -357,20 +335,10 @@ def main(page: ft.Page):
 
     def _apply_annotations(md_text: str, amap: dict) -> str:
         """Apply user-selected annotation mappings to markdown text."""
-        it = [
-            ("彩色文字", r'<font color="[^"]*">', r'</font>'),
-            ("粗体",      r'<b>', r'</b>'),
-            ("斜体",      r'<i>', r'</i>'),
-            ("删除线",    r'<s>', r'</s>'),
-            ("下划线",    r'<u>', r'</u>'),
-            ("高亮",      r'<span style="background-color:[^"]*">', r'</span>'),
-        ]
-        for label, open_pat, close_pat in it:
+        for label, open_pat, close_pat in ANNOTATION_TYPES:
             marker = amap.get(label)
-            if not marker:
+            if not marker or marker == "<font>":
                 continue
-            if marker == "<font>":
-                continue  # keep as-is
             md_text = re.sub(open_pat + r'(.*?)' + close_pat,
                              marker + r'\1' + marker,
                              md_text, flags=re.DOTALL)
@@ -552,7 +520,7 @@ def main(page: ft.Page):
             threading.Thread(target=worker, daemon=True).start()
 
         if chk_annotate.value:
-            _show_annotation_dialog(files, lambda: _start())
+            _show_annotation_dialog(lambda: _start())
             return
         _start()
 
