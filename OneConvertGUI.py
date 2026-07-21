@@ -84,7 +84,7 @@ def main(page: ft.Page):
 
     # -- controls (defaults from saved config or sensible defaults) ---
     txt_input = ft.TextField(
-        label="输入 .one 文件", hint_text="点击浏览选择 OneNote 分区文件",
+        label="输入 .one 或 .xml 文件", hint_text="点击浏览选择 OneNote 分区或 XML 文件",
         expand=True, icon=ft.Icons.DESIGN_SERVICES_OUTLINED, dense=True,
         value=cfg.get("input_file", ""),
     )
@@ -102,6 +102,7 @@ def main(page: ft.Page):
     chk_empty  = ft.Checkbox(label="包含空页面", value=cfg.get("chk_empty", False))
     chk_skip   = ft.Checkbox(label="仅生成 XML（跳过 Markdown）", value=cfg.get("chk_skip", False))
     chk_assets = ft.Checkbox(label="复制图片资源", value=cfg.get("chk_assets", True))
+    chk_xml    = ft.Checkbox(label="输出 XML 文件", value=cfg.get("chk_xml", True))
     ddl_syntax = ft.Dropdown(
         label="图片语法",
         options=[ft.dropdown.Option("markdown"), ft.dropdown.Option("obsidian")],
@@ -117,7 +118,7 @@ def main(page: ft.Page):
     log_lines: list[str] = []
 
     md_ctrls = [ddl_syntax, chk_assets, txt_asset]
-    all_ctrls = [txt_input, txt_xml, txt_md, chk_empty, chk_skip, chk_assets,
+    all_ctrls = [txt_input, txt_xml, txt_md, chk_empty, chk_skip, chk_assets, chk_xml,
                  ddl_syntax, txt_asset]
 
     btn_run = ft.Button(content=ft.Text("开始转换"), icon=ft.Icons.PLAY_ARROW,
@@ -126,6 +127,19 @@ def main(page: ft.Page):
                          bgcolor=ft.Colors.TRANSPARENT)
 
     # -- helpers ----------------------------------------------------
+    btn_xml = ft.IconButton(
+        icon=ft.Icons.CODE,
+        icon_color=ACC if chk_xml.value else ft.Colors.SECONDARY,
+        tooltip="输出 XML" if chk_xml.value else "仅 Markdown",
+        on_click=lambda _: _toggle_xml())
+
+    def _toggle_xml():
+        chk_xml.value = not chk_xml.value
+        btn_xml.icon_color = ACC if chk_xml.value else ft.Colors.SECONDARY
+        btn_xml.tooltip = "输出 XML" if chk_xml.value else "仅 Markdown"
+        save_settings()
+        page.update()
+
     def save_settings():
         save_config({
             "input_file": txt_input.value or "",
@@ -134,6 +148,7 @@ def main(page: ft.Page):
             "chk_empty": chk_empty.value,
             "chk_skip": chk_skip.value,
             "chk_assets": chk_assets.value,
+            "chk_xml": chk_xml.value,
             "syntax": ddl_syntax.value or "obsidian",
             "asset_dir": txt_asset.value or "attachment",
         })
@@ -152,7 +167,7 @@ def main(page: ft.Page):
 
     def browse_file(target: ft.TextField, _):
         async def _pick():
-            r = await fp.pick_files(allowed_extensions=["one"])
+            r = await fp.pick_files(allowed_extensions=["one", "xml"])
             if r and r[0]:
                 target.value = r[0].path
                 page.update()
@@ -263,10 +278,12 @@ def main(page: ft.Page):
         xout = (txt_xml.value or "").strip() or str(OUT_BASE / "xml")
         mout = (txt_md.value or "").strip() or str(OUT_BASE / "markdown")
         adir = (txt_asset.value or "").strip()
+        is_xml = inp.lower().endswith(".xml")
+        is_one = inp.lower().endswith(".one")
 
-        if not inp:              snack("请选择 .one 文件"); return
+        if not inp:              snack("请选择 .one 或 .xml 文件"); return
         if not os.path.isfile(inp): snack(f"未找到: {inp}"); return
-        if not inp.lower().endswith(".one"): snack("必须是 .one 文件"); return
+        if not (is_one or is_xml): snack("必须是 .one 或 .xml 文件"); return
         if not chk_skip.value and chk_assets.value and not adir: snack("资源目录名不能为空"); return
 
         running = True
@@ -283,7 +300,8 @@ def main(page: ft.Page):
 
         log_lines.append(f"[{ts()}] 开始转换")
         log_lines.append(f"输入: {inp}")
-        log_lines.append(f"XML:  {xout}")
+        if not is_xml:
+            log_lines.append(f"输出XML:  {chk_xml.value}")
         if chk_skip.value:
             log_lines.append("Markdown: 跳过")
         else:
@@ -293,7 +311,7 @@ def main(page: ft.Page):
 
         show_log_dialog()
 
-        # Step 1: .one → XML (PowerShell + OneNote COM)
+        # Step 1: .one → XML (PowerShell + OneNote COM) — skip if XML input
         xml_script = str(ROOT / "Convert-OneNoteSectionToXml.ps1")
         ps_args = [
             get_ps(), "-NoProfile", "-ExecutionPolicy", "Bypass",
@@ -305,46 +323,47 @@ def main(page: ft.Page):
         if chk_empty.value:
             ps_args.append("-IncludeEmptyPages")
 
-        # Step 2: XML → Markdown (in-process, no system Python needed)
-        md_script = str(ROOT / "convert_onenote_xml.py")
         syntax = ddl_syntax.value or "obsidian"
-        asset_flag = f"--asset-dir" if chk_assets.value else None
 
         def worker():
             nonlocal proc
             code = -1
             try:
-                # ── Step 1: .one → XML ──
-                log_lines.append(f"[{ts()}] 步骤1/2: .one → XML")
-                p1 = subprocess.Popen(
-                    ps_args, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                    text=True, encoding="utf-8", errors="replace",
-                    cwd=str(ROOT),
-                    creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
-                )
-                proc = p1
-                out1, err1 = p1.communicate(timeout=180)
-                if out1:
-                    for line in out1.split("\n"):
-                        if line.strip():
-                            page.run_thread(_push_log, line.strip())
-                if err1:
-                    for line in err1.split("\n"):
-                        if line.strip():
-                            page.run_thread(_push_log, f"[ERR] {line.strip()}")
-                if p1.returncode != 0:
-                    log_lines.append(f"[ERR] 步骤1失败, 退出码: {p1.returncode}")
-                    page.run_thread(finish, p1.returncode)
-                    return
+                if is_one:
+                    # ── Step 1: .one → XML ──
+                    log_lines.append(f"[{ts()}] 步骤1/2: .one → XML")
+                    p1 = subprocess.Popen(
+                        ps_args, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                        text=True, encoding="utf-8", errors="replace",
+                        cwd=str(ROOT),
+                        creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
+                    )
+                    proc = p1
+                    out1, err1 = p1.communicate(timeout=180)
+                    if out1:
+                        for line in out1.split("\n"):
+                            if line.strip():
+                                page.run_thread(_push_log, line.strip())
+                    if err1:
+                        for line in err1.split("\n"):
+                            if line.strip():
+                                page.run_thread(_push_log, f"[ERR] {line.strip()}")
+                    if p1.returncode != 0:
+                        log_lines.append(f"[ERR] 步骤1失败, 退出码: {p1.returncode}")
+                        page.run_thread(finish, p1.returncode)
+                        return
 
                 # ── Step 2: XML → Markdown (in-process) ──
                 if not chk_skip.value:
-                    log_lines.append(f"[{ts()}] 步骤2/2: XML → Markdown")
+                    log_lines.append(f"[{ts()}] {'步骤2/2' if is_one else '步骤1/1'}: XML → Markdown")
                     sys.path.insert(0, str(ROOT))
                     import convert_onenote_xml as converter
                     out_dir = Path(mout)
                     out_dir.mkdir(parents=True, exist_ok=True)
-                    xml_dir = Path(xout) / Path(inp).stem
+                    if is_xml:
+                        xml_dir = Path(inp).parent  # directory containing the XML file(s)
+                    else:
+                        xml_dir = Path(xout) / Path(inp).stem
                     if xml_dir.exists():
                         written, resolver = converter.convert_path(
                             xml_input=xml_dir,
@@ -414,7 +433,7 @@ def main(page: ft.Page):
     btn_stop.on_click = stop
 
     # Save settings on change
-    for ctrl in [txt_input, txt_xml, txt_md, chk_empty, chk_skip, chk_assets, txt_asset]:
+    for ctrl in [txt_input, txt_xml, txt_md, chk_empty, chk_skip, chk_assets, chk_xml, txt_asset]:
         orig = ctrl.on_change
         def _wrap(c, o):
             c.on_change = lambda e: (save_settings(), o(e) if o else None)
@@ -437,6 +456,7 @@ def main(page: ft.Page):
                                 color=ft.Colors.SECONDARY),
                     ], spacing=2),
                     ft.Container(expand=True),
+                    btn_xml,
                     ft.IconButton(icon=ft.Icons.BRIGHTNESS_4_OUTLINED, tooltip="切换主题", on_click=toggle_theme),
                     ft.IconButton(icon=ft.Icons.INFO_OUTLINED, tooltip="关于", on_click=show_about),
                 ]),
