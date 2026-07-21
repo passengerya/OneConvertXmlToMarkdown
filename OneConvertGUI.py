@@ -84,7 +84,7 @@ def main(page: ft.Page):
 
     # -- controls (defaults from saved config or sensible defaults) ---
     txt_input = ft.TextField(
-        label="输入 .one 或 .xml 文件", hint_text="点击浏览选择 OneNote 分区或 XML 文件",
+        label="输入文件 (.one / .xml)", hint_text="可多选，以 ; 分隔",
         expand=True, icon=ft.Icons.DESIGN_SERVICES_OUTLINED, dense=True,
         value=cfg.get("input_file", ""),
     )
@@ -154,9 +154,15 @@ def main(page: ft.Page):
 
     def browse_file(target: ft.TextField, _):
         async def _pick():
-            r = await fp.pick_files(allowed_extensions=["one", "xml"])
-            if r and r[0]:
-                target.value = r[0].path
+            r = await fp.pick_files(allowed_extensions=["one", "xml"], allow_multiple=True)
+            if r:
+                paths = [f.path for f in r]
+                # Append to existing input
+                existing = [p.strip() for p in (target.value or "").split(";") if p.strip()]
+                for p in paths:
+                    if p not in existing:
+                        existing.append(p)
+                target.value = ";".join(existing)
                 page.update()
         page.run_task(_pick)
 
@@ -255,23 +261,28 @@ def main(page: ft.Page):
                     pass
             threading.Thread(target=auto_close, daemon=True).start()
 
-    # -- pipeline (2-step: PS for XML, in-process for Markdown) --
+    # -- pipeline (multi-file: PS for each .one, in-process for Markdown) --
     def run(_):
         nonlocal proc, running
         if running:
             return
 
-        inp  = (txt_input.value or "").strip()
-        xout = (txt_xml.value or "").strip() or str(OUT_BASE / "xml")
-        mout = (txt_md.value or "").strip() or str(OUT_BASE / "markdown")
+        in_raw = (txt_input.value or "").strip()
+        xout_base = (txt_xml.value or "").strip() or str(OUT_BASE / "xml")
+        mout_base = (txt_md.value or "").strip() or str(OUT_BASE / "markdown")
         adir = (txt_asset.value or "").strip()
-        is_xml = inp.lower().endswith(".xml")
-        is_one = inp.lower().endswith(".one")
 
-        if not inp:              snack("请选择 .one 或 .xml 文件"); return
-        if not os.path.isfile(inp): snack(f"未找到: {inp}"); return
-        if not (is_one or is_xml): snack("必须是 .one 或 .xml 文件"); return
-        if not chk_skip.value and chk_assets.value and not adir: snack("资源目录名不能为空"); return
+        if not in_raw:           snack("请选择 .one 或 .xml 文件"); return
+        if not chk_assets.value and not adir: snack("资源目录名不能为空"); return
+
+        # Parse input
+        files = [p.strip() for p in in_raw.split(";") if p.strip()]
+        ones = [f for f in files if f.lower().endswith(".one")]
+        xmls = [f for f in files if f.lower().endswith(".xml")]
+        if not ones and not xmls: snack("必须是 .one 或 .xml 文件"); return
+        for f in files:
+            if not os.path.isfile(f):
+                snack(f"未找到: {f}"); return
 
         running = True
         log_lines.clear()
@@ -286,37 +297,46 @@ def main(page: ft.Page):
         page.update()
 
         log_lines.append(f"[{ts()}] 开始转换")
-        log_lines.append(f"输入: {inp}")
-        if chk_skip.value:
-            log_lines.append("Markdown: 跳过")
-        else:
-            log_lines.append(f"MD:   {mout}")
+        log_lines.append(f"文件数: {len(files)} ({len(ones)} one, {len(xmls)} xml)")
+        if not chk_skip.value:
+            log_lines.append(f"MD:   {mout_base}")
             log_lines.append(f"语法: {ddl_syntax.value}")
         log_lines.append("-" * 50)
 
         show_log_dialog()
 
-        # Step 1: .one → XML (PowerShell + OneNote COM) — skip if XML input
         xml_script = str(ROOT / "Convert-OneNoteSectionToXml.ps1")
-        ps_args = [
-            get_ps(), "-NoProfile", "-ExecutionPolicy", "Bypass",
-            "-File", xml_script,
-            "-InputOneFile", inp,
-            "-OutputDirectory", xout,
-            "-LoadTimeoutSeconds", "30",
-        ]
-        if chk_empty.value:
-            ps_args.append("-IncludeEmptyPages")
-
         syntax = ddl_syntax.value or "obsidian"
+        # Shared resource directory — use relative path so all files point to mout_base/attachment/
+        asset_rel = f"../{adir}" if adir and "/" not in adir and "\\" not in adir else adir
 
         def worker():
             nonlocal proc
-            code = -1
+            code = 0
+            total_md = 0
+            ext_imgs = 0
+            pl_imgs = 0
             try:
-                if is_one:
-                    # ── Step 1: .one → XML ──
-                    log_lines.append(f"[{ts()}] 步骤1/2: .one → XML")
+                sys.path.insert(0, str(ROOT))
+                import convert_onenote_xml as converter
+
+                # ── Process each .one file ──
+                for one_path in ones:
+                    stem = Path(one_path).stem
+                    xout = Path(xout_base) / stem
+                    mout = Path(mout_base) / stem
+
+                    log_lines.append(f"[{ts()}] .one → XML: {stem}")
+                    ps_args = [
+                        get_ps(), "-NoProfile", "-ExecutionPolicy", "Bypass",
+                        "-File", xml_script,
+                        "-InputOneFile", one_path,
+                        "-OutputDirectory", str(Path(xout_base)),
+                        "-LoadTimeoutSeconds", "30",
+                    ]
+                    if chk_empty.value:
+                        ps_args.append("-IncludeEmptyPages")
+
                     p1 = subprocess.Popen(
                         ps_args, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                         text=True, encoding="utf-8", errors="replace",
@@ -334,52 +354,67 @@ def main(page: ft.Page):
                             if line.strip():
                                 page.run_thread(_push_log, f"[ERR] {line.strip()}")
                     if p1.returncode != 0:
-                        log_lines.append(f"[ERR] 步骤1失败, 退出码: {p1.returncode}")
-                        page.run_thread(finish, p1.returncode)
-                        return
+                        log_lines.append(f"[ERR] {stem} XML 转换失败")
+                        code = max(code, p1.returncode)
+                        continue
 
-                # ── Step 2: XML → Markdown (in-process) ──
-                if not chk_skip.value:
-                    log_lines.append(f"[{ts()}] {'步骤2/2' if is_one else '步骤1/1'}: XML → Markdown")
-                    sys.path.insert(0, str(ROOT))
-                    import convert_onenote_xml as converter
-                    out_dir = Path(mout)
-                    out_dir.mkdir(parents=True, exist_ok=True)
-                    if is_xml:
-                        xml_dir = Path(inp)  # single XML file, not directory
-                    else:
-                        xml_dir = Path(xout) / Path(inp).stem
-                    if xml_dir.exists():
+                    if not chk_skip.value:
+                        xml_dir = Path(xout_base) / stem
+                        if xml_dir.exists():
+                            mout.mkdir(parents=True, exist_ok=True)
+                            written, resolver = converter.convert_path(
+                                xml_input=xml_dir, output_dir=mout,
+                                attachment_dir=None, sort_key="name",
+                                recursive=True, image_syntax=syntax,
+                                copy_attachments=chk_assets.value,
+                                asset_dir_name=asset_rel,
+                            )
+                            total_md += len(written)
+                            ext_imgs += resolver.extracted_from_xml_count
+                            pl_imgs += resolver.placeholder_count
+                            log_lines.append(f"  {stem} → {len(written)} md")
+                            if chk_md_only.value:
+                                try:
+                                    shutil.rmtree(xml_dir)
+                                except Exception:
+                                    pass
+                        else:
+                            log_lines.append(f"[ERR] XML 目录不存在: {xml_dir}")
+
+                # ── Process each .xml file ──
+                for xml_path in xmls:
+                    if not chk_skip.value:
+                        log_lines.append(f"[{ts()}] XML → MD: {Path(xml_path).name}")
+                        mout = Path(mout_base)
+                        mout.mkdir(parents=True, exist_ok=True)
                         written, resolver = converter.convert_path(
-                            xml_input=xml_dir,
-                            output_dir=out_dir,
-                            attachment_dir=None,
-                            sort_key="name",
-                            recursive=True,
-                            image_syntax=syntax,
+                            xml_input=Path(xml_path), output_dir=mout,
+                            attachment_dir=None, sort_key="name",
+                            recursive=False, image_syntax=syntax,
                             copy_attachments=chk_assets.value,
-                            asset_dir_name=adir,
+                            asset_dir_name=asset_rel,
                         )
-                        log_lines.append(f"  生成 {len(written)} 个 Markdown 文件")
-                        if resolver.placeholder_count:
-                            log_lines.append(f"  占位图: {resolver.placeholder_count}")
-                        if resolver.extracted_from_xml_count:
-                            log_lines.append(f"  提取图片: {resolver.extracted_from_xml_count}")
-                        # Clean up XML if only Markdown is requested
-                        if chk_md_only.value and is_one:
-                            try:
-                                shutil.rmtree(xml_dir)
-                                log_lines.append("  XML 临时文件已清理")
-                            except Exception:
-                                pass
-                    else:
-                        log_lines.append(f"[ERR] XML 目录不存在: {xml_dir}")
-                        page.run_thread(finish, 1)
-                        return
+                        total_md += len(written)
+                        ext_imgs += resolver.extracted_from_xml_count
+                        pl_imgs += resolver.placeholder_count
+                        log_lines.append(f"  → {len(written)} md")
 
-                code = 0
+                # Clean up XML base if chk_md_only
+                if chk_md_only.value and chk_skip.value:
+                    try:
+                        shutil.rmtree(Path(xout_base))
+                        log_lines.append("  XML 已清理")
+                    except Exception:
+                        pass
+
+                if not chk_skip.value:
+                    log_lines.append(f"  总计: {total_md} md 文件")
+                    if ext_imgs:
+                        log_lines.append(f"  提取图片: {ext_imgs}")
+                    if pl_imgs:
+                        log_lines.append(f"  占位图: {pl_imgs}")
             except subprocess.TimeoutExpired:
-                log_lines.append("[ERR] 步骤1超时(180s)")
+                log_lines.append("[ERR] 转换超时(180s)")
                 code = 1
             except Exception as ex:
                 log_lines.append(f"[ERR] {ex}")
