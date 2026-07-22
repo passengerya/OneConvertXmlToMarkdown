@@ -270,9 +270,12 @@ def main(page: ft.Page):
         ("删除线", r"style=['\"]?[^'\"<>]*text-decoration:line-through", r'<s>', r'</s>'),
         ("下划线", r"style=['\"]?[^'\"<>]*text-decoration:underline",    r'<u>', r'</u>'),
     ]
-    COLOR_TYPES = [  # per-color types — scan extracts color values from style attrs
+    COLOR_TYPES_CDATA = [  # CDATA span styles
         ("彩色文字", r"style=['\"][^'\"]*color:\s*([#a-zA-Z0-9]+)",          r'<font color="\1">', r'</font>'),
         ("彩色高亮", r"style=['\"][^'\"]*background(?:-color)?:\s*([^;'\"]+)", r'<span style="background-color:\1">', r'</span>'),
+    ]
+    COLOR_TYPES_OE = [  # OE inline style values (no style= prefix, just CSS)
+        ("彩色文字", r"(?:^|;\s*)color:\s*([#a-zA-Z0-9]+)",                   r'<font color="\1">', r'</font>'),
     ]
     OBSIDIAN_TARGETS = [
         ("不转换", ""),
@@ -294,19 +297,32 @@ def main(page: ft.Page):
                 fps = [xml_src] if xml_src.is_file() else list(xml_src.rglob("*.xml"))
                 for xf in fps:
                     raw = xf.read_text(encoding="utf-8", errors="replace")
-                    # Only scan CDATA sections — this is what the converter actually processes
                     cdata_parts = re.findall(r"<!\[CDATA\[(.*?)\]\]>", raw, re.DOTALL)
-                    t = "\n".join(cdata_parts)
-                    if not t:
+                    oe_styles = re.findall(r"<one:OE[^>]*style=\"([^\"]*)\"[^>]*>", raw)
+                    cdata_t = "\n".join(cdata_parts)
+                    oe_t = "\n".join(oe_styles)
+                    if not cdata_t.strip() and not oe_t.strip():
                         continue
-                    # Binary types
+                    # Binary types (CDATA only — span styles)
                     for label, scan_pat, open_pat, close_pat in BINARY_TYPES:
-                        if re.search(scan_pat, t) and label not in seen:
+                        if re.search(scan_pat, cdata_t) and label not in seen:
                             seen.add(label)
                             items.append((label, "", open_pat, close_pat))
-                    # Per-color types
-                    for label, scan_pat, open_tmpl, close_pat in COLOR_TYPES:
-                        for m in re.finditer(scan_pat, t):
+                    # Per-color types — CDATA
+                    for label, scan_pat, open_tmpl, close_pat in COLOR_TYPES_CDATA:
+                        for m in re.finditer(scan_pat, cdata_t):
+                            val = m.group(1).strip().rstrip(";").strip('"').strip("'")
+                            if val.lower() in ("white", "#ffffff", "#fff",
+                                               "automatic", "black", "#000000", "#000"):
+                                continue
+                            key = f"{label}({val})"
+                            if key not in seen:
+                                seen.add(key)
+                                open_pat = open_tmpl.replace(r'\1', re.escape(val))
+                                items.append((key, val, open_pat, close_pat))
+                    # Per-color types — OE style attrs
+                    for label, scan_pat, open_tmpl, close_pat in COLOR_TYPES_OE:
+                        for m in re.finditer(scan_pat, oe_t):
                             val = m.group(1).strip().rstrip(";").strip('"').strip("'")
                             if val.lower() in ("white", "#ffffff", "#fff",
                                                "automatic", "black", "#000000", "#000"):
