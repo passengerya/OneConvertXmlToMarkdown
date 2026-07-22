@@ -265,14 +265,14 @@ def main(page: ft.Page):
 
     # -- annotation conversion: OneNote formatting → Obsidian ----
     BINARY_TYPES = [  # on/off types — no color value
-        ("粗体",   r'font-weight:bold',              r'<b>', r'</b>'),
-        ("斜体",   r'font-style:italic',             r'<i>', r'</i>'),
-        ("删除线", r'text-decoration:line-through',  r'<s>', r'</s>'),
-        ("下划线", r'text-decoration:underline',     r'<u>', r'</u>'),
+        ("粗体",   r"style=['\"]?[^'\"<>]*font-weight:bold",   r'<b>', r'</b>'),
+        ("斜体",   r"style=['\"]?[^'\"<>]*font-style:italic",  r'<i>', r'</i>'),
+        ("删除线", r"style=['\"]?[^'\"<>]*text-decoration:line-through", r'<s>', r'</s>'),
+        ("下划线", r"style=['\"]?[^'\"<>]*text-decoration:underline",    r'<u>', r'</u>'),
     ]
-    COLOR_TYPES = [  # per-color types — scan extracts color values
-        ("彩色文字", r'color:([#a-zA-Z0-9]+)',             r'<font color="\1">', r'</font>'),
-        ("彩色高亮", r"background(?:-color)?:([^;'\"]+)", r'<span style="background-color:\1">', r'</span>'),
+    COLOR_TYPES = [  # per-color types — scan extracts color values from style attrs
+        ("彩色文字", r"style=['\"][^'\"]*color:\s*([#a-zA-Z0-9]+)",          r'<font color="\1">', r'</font>'),
+        ("彩色高亮", r"style=['\"][^'\"]*background(?:-color)?:\s*([^;'\"]+)", r'<span style="background-color:\1">', r'</span>'),
     ]
     OBSIDIAN_TARGETS = [
         ("不转换", ""),
@@ -293,7 +293,12 @@ def main(page: ft.Page):
             try:
                 fps = [xml_src] if xml_src.is_file() else list(xml_src.rglob("*.xml"))
                 for xf in fps:
-                    t = xf.read_text(encoding="utf-8", errors="replace")
+                    raw = xf.read_text(encoding="utf-8", errors="replace")
+                    # Only scan CDATA sections — this is what the converter actually processes
+                    cdata_parts = re.findall(r"<!\[CDATA\[(.*?)\]\]>", raw, re.DOTALL)
+                    t = "\n".join(cdata_parts)
+                    if not t:
+                        continue
                     # Binary types
                     for label, scan_pat, open_pat, close_pat in BINARY_TYPES:
                         if re.search(scan_pat, t) and label not in seen:
