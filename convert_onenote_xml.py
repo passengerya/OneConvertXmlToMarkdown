@@ -262,9 +262,15 @@ class RichTextHTMLParser(HTMLParser):
             self.tag_stack.pop()
             if self.color_stack:
                 self.color_stack.pop()
-        elif t == "span" and self.tag_stack and self.tag_stack[-1] == "span":
-            self.parts.append("</span>")
-            self.tag_stack.pop()
+        elif t == "span":
+            # Close all tags opened by this span
+            while self.tag_stack:
+                top = self.tag_stack.pop()
+                if top == "span":
+                    self.parts.append("</span>")
+                    break
+                else:
+                    self.parts.append(f"</{top}>")
             if self.color_stack:
                 self.color_stack.pop()
         else:
