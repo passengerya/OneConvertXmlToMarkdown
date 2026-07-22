@@ -255,8 +255,16 @@ def main(page: ft.Page):
                 pass
 
         def _copy_log(e):
-            subprocess.run(["clip"], input="\n".join(log_lines),
-                           text=True, shell=True, encoding="utf-8", errors="replace")
+            # Write to temp file then PowerShell reads and sets clipboard
+            import tempfile
+            text = "\n".join(log_lines)
+            tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".txt",
+                                              encoding="utf-8-sig", delete=False)
+            tmp.write(text)
+            tmp.close()
+            ps_cmd = f'Get-Content -Encoding UTF8 "{tmp.name}" | Set-Clipboard; Remove-Item "{tmp.name}"'
+            subprocess.run(["powershell", "-Command", ps_cmd],
+                           creationflags=subprocess.CREATE_NO_WINDOW)
             page.pop_dialog()
             page.update()
 
