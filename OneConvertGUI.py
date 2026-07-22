@@ -271,8 +271,8 @@ def main(page: ft.Page):
         ("下划线", r'text-decoration:underline',     r'<u>', r'</u>'),
     ]
     COLOR_TYPES = [  # per-color types — scan extracts color values
-        ("彩色文字", r'color:(#[a-fA-F0-9]{3,6})',         r'<font color="\1">', r'</font>'),
-        ("彩色高亮", r'background(?:-color)?:(\S+?)[;"]',  r'<span style="background-color:\1">', r'</span>'),
+        ("彩色文字", r'color:([#a-zA-Z0-9]+)',             r'<font color="\1">', r'</font>'),
+        ("彩色高亮", r"background(?:-color)?:([^;'\"]+)", r'<span style="background-color:\1">', r'</span>'),
     ]
     OBSIDIAN_TARGETS = [
         ("不转换", ""),
@@ -303,6 +303,9 @@ def main(page: ft.Page):
                     for label, scan_pat, open_tmpl, close_pat in COLOR_TYPES:
                         for m in re.finditer(scan_pat, t):
                             val = m.group(1).strip().rstrip(";").strip('"').strip("'")
+                            if val.lower() in ("white", "#ffffff", "#fff",
+                                               "automatic", "black", "#000000", "#000"):
+                                continue
                             key = f"{label}({val})"
                             if key not in seen:
                                 seen.add(key)
@@ -424,7 +427,7 @@ def main(page: ft.Page):
 
             xml_script = str(ROOT / "Convert-OneNoteSectionToXml.ps1")
             syntax = ddl_syntax.value or "obsidian"
-            asset_rel = f"../{adir}" if adir and "/" not in adir and "\\" not in adir else adir
+            asset_rel = adir if adir else "attachment"
 
             def worker():
                 nonlocal proc
