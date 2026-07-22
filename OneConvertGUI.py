@@ -255,7 +255,8 @@ def main(page: ft.Page):
                 pass
 
         def _copy_log(e):
-            page.clipboard = "\n".join(log_lines)
+            subprocess.run(["clip"], input="\n".join(log_lines),
+                           text=True, shell=True, encoding="utf-8", errors="replace")
             page.pop_dialog()
             page.update()
 
