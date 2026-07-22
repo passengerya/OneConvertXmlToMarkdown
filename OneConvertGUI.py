@@ -255,7 +255,7 @@ def main(page: ft.Page):
                 pass
 
         def _copy_log(e):
-            page.set_clipboard("\n".join(log_lines))
+            page.clipboard = "\n".join(log_lines)
             page.pop_dialog()
             page.update()
 
