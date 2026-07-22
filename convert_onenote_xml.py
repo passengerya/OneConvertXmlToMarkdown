@@ -1631,7 +1631,7 @@ def convert_path(
             asset_dir_names=[asset_dir_name, "_generated_images"],
             image_syntax=image_syntax,
         )
-        out_file.write_text(md_text, encoding="utf-8")
+        out_file.write_text(md_text, encoding="utf-8-sig")
         written.append(out_file)
     return written, resolver
 

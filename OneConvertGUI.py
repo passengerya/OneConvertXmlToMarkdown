@@ -422,8 +422,6 @@ def main(page: ft.Page):
                 log_lines.append(f"语法: {ddl_syntax.value}")
             log_lines.append("-" * 50)
 
-            show_log_dialog()
-
             xml_script = str(ROOT / "Convert-OneNoteSectionToXml.ps1")
             syntax = ddl_syntax.value or "obsidian"
             asset_rel = f"../{adir}" if adir and "/" not in adir and "\\" not in adir else adir
@@ -544,14 +542,15 @@ def main(page: ft.Page):
                         if amap:
                             for md_path in all_written:
                                 try:
-                                    t = md_path.read_text(encoding="utf-8")
-                                    md_path.write_text(_apply_annotations(t, amap, annot_items))
+                                    t = md_path.read_text(encoding="utf-8-sig")
+                                    md_path.write_text(_apply_annotations(t, amap, annot_items), encoding="utf-8-sig")
                                 except Exception:
                                     pass
+                        show_log_dialog()
                         page.run_thread(finish, code)
                     page.run_thread(lambda: _show_annotation_dialog(_apply_and_finish, annot_items))
                 else:
-                    page.run_thread(finish, code)
+                    page.run_thread(lambda: (show_log_dialog(), finish(code)))
 
             def finish(c: int):
                 nonlocal running
