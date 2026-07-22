@@ -1,25 +1,33 @@
 # OneConvertXML
 
-将 OneNote 分区文件（`.one`）按页面层级转换为分层 Markdown，针对嵌套表格深度优化。
+OneNote 分区文件（`.one`）转分层 Markdown，针对嵌套表格深度优化。
 
 `.one → 分层 XML → 分层 Markdown`
 
 ## 功能特性
 
-- 按列数 + 嵌套深度自动选渲染策略（单列 → 有序列表 / 双列 → 标题层级 / 深层嵌套 → `#` → `##` → `###` → 列表降维）
-- 标题规范：一级 `一、` / 二级 `（一）` / 三级 `1.`
-- 图片独立段落提取、颜色白→黑转换、OneNote 标记原样保留
-- Flet 桌面 GUI：暗色/亮色主题、06:00–18:00 自动日间、窗口自适应
-- 默认输出桌面 `OneConvertXmlToMarkdown_Output/`，路径从注册表自动读取
-- 图片语法默认 Obsidian（`![[]]`）
-- 配置自动记忆，重启恢复
-- 错误弹窗常驻 + 复制日志按钮，日间/夜间模式文字可读
+**表格转换**
+- 按列数 + 嵌套深度自动路由：1 列 → 有序列表 / 2 列 → 标题层级 / 深层嵌套 → `#` `##` `###` + 列表降维
+- 标题规范：一级 `一、` 二级 `（一）` 三级 `1.`
+
+**标注转换**
+- 智能识别 OneNote CDATA 和 OE 属性中的 6 种标注：彩色文字、粗体、斜体、删除线、下划线、高亮
+- 按颜色值拆分，不同颜色独立映射到 Obsidian 格式
+- 粗体 → `**`，斜体 → `*`，删除线 → `~~`，高亮 → `==`，行内代码 → `` ` ``，保留 HTML
+- 颜色白→黑自动转换
+
+**桌面 GUI**
+- 暗色/亮色主题、06:00–18:00 自动日间、窗口自适应
+- 多文件列表式选择，每文件独立移除按钮，浏览追加
+- 详细分阶段操作日志，日志弹窗停留 3 秒，支持复制
+- 输出目录默认桌面、从注册表读取自定义桌面路径
+- 图片语法默认 Obsidian，配置自动记忆
 
 ## 快速开始
 
 ### 方式一：下载 exe
 
-从 [Releases](https://github.com/passengerya/OneConvertXmlToMarkdown/releases) 下载 `OneConvert.exe`，双击运行。**无需安装 Python**，仅需 Windows + OneNote。
+从 [Releases](https://github.com/passengerya/OneConvertXmlToMarkdown/releases) 下载 `OneConvert.exe`。**无需 Python**，双击运行。
 
 ### 方式二：源码运行
 
@@ -31,7 +39,7 @@ pip install flet flet-desktop
 ## 运行环境
 
 - Windows + OneNote（COM 接口）
-- Python 3.8+（exe 无需 Python）
+- exe 无需 Python；源码运行需 Python 3.8+
 
 ## 文件说明
 
@@ -40,9 +48,9 @@ pip install flet flet-desktop
 | `OneConvertGUI.py` | Flet 桌面 GUI |
 | `Run-OneConvertGUI.bat` | 双击启动 |
 | `convert_onenote_xml.py` | XML → Markdown 核心转换器 |
-| `Convert-OneNoteSectionToXml.ps1` | .one → 分层 XML（OneNote COM） |
+| `Convert-OneNoteSectionToXml.ps1` | .one → XML（OneNote COM） |
 | `Convert-OneNoteToMarkdownPipeline.ps1` | 一键流水线 |
-| `release.py` | 交互式打包发布工具（版本号仅推送成功后递增） |
+| `release.py` | 交互式打包发布（版本号仅推送成功后递增） |
 | `.oneconvert_config.json` | 用户配置（自动生成） |
 
 ## 使用方式
@@ -51,19 +59,17 @@ pip install flet flet-desktop
 
 双击 `Run-OneConvertGUI.bat`。
 
-- 选择 `.one` 文件，输出目录默认桌面
-- 图片语法默认 Obsidian，可切换 Markdown
-- 点击"开始转换"，弹出日志弹窗
-- 成功：弹窗 2 秒关闭；失败：弹窗保持打开，可复制日志
+- 浏览选择 `.one` / `.xml` 文件，支持多选
+- 勾选"标注转换"自动识别标注并弹出映射窗口
+- 点击"开始转换"，日志弹窗显示各阶段进度
+- 成功弹窗 3 秒关闭；失败弹窗保持，可复制日志调试
 
 ### 命令行
 
 ```powershell
 # 一键流水线
 powershell -ExecutionPolicy Bypass -File .\Convert-OneNoteToMarkdownPipeline.ps1 `
-  -InputOneFile .\新临检.one `
-  -XmlOutputDirectory .\output\xml `
-  -MarkdownOutputDirectory .\output\markdown
+  -InputOneFile .\新临检.one -XmlOutputDirectory .\output\xml -MarkdownOutputDirectory .\output\markdown
 
 # 仅 XML
 powershell -ExecutionPolicy Bypass -File .\Convert-OneNoteSectionToXml.ps1 `
@@ -95,10 +101,25 @@ python release.py
 | 3 层+ | `#` → `##` → `###` 逐级降 | 正文或列表 |
 | 4 层+ | 无序/有序列表 | 按缩进保持层级 |
 
+## 输出结构
+
+```
+OneConvertXmlToMarkdown_Output/    # 桌面默认
+├── xml/
+│   └── 分区名/                    # .one 同名 XML 目录
+│       ├── 001 页面.xml
+│       └── section-hierarchy.xml
+└── markdown/
+    ├── 分区名/                    # .one → 文件夹（含多个 .md）
+    │   └── 001 页面.md
+    ├── demo.md                    # .xml → 单个 .md
+    └── attachment/                # 共享资源目录
+```
+
 ## 注意事项
 
 - 确保 OneNote 能打开目标 `.one` 文件
-- 重复导出到同一目录安全，会自动清理
+- 重复导出到同一目录安全，自动清理
 - 大文件建议 `-LoadTimeoutSeconds 120`
-- exe 由 PyInstaller 打包，兼容 Python 3.8–3.14 全版本
+- exe 兼容 Python 3.8–3.14 全版本
 - 杀毒软件可能误报，将 exe 加入白名单
