@@ -260,11 +260,12 @@ def main(page: ft.Page):
             page.update()
 
         footer = ("转换失败，请查看上方错误信息" if is_error
-                  else "此窗口将在 2 秒后自动关闭")
-        actions = [ft.Text(footer, size=12, color=ft.Colors.ERROR if is_error else ft.Colors.SECONDARY)]
-        if is_error:
-            actions.insert(0, ft.Button(content=ft.Text("复制日志"), icon=ft.Icons.COPY,
-                                          on_click=_copy_log, bgcolor=ACC, color=ft.Colors.WHITE))
+                  else "此窗口将在 3 秒后自动关闭")
+        actions = [
+            ft.Button(content=ft.Text("复制日志"), icon=ft.Icons.COPY,
+                      on_click=_copy_log, bgcolor=ACC, color=ft.Colors.WHITE),
+            ft.Text(footer, size=12, color=ft.Colors.ERROR if is_error else ft.Colors.SECONDARY),
+        ]
         dialog = ft.AlertDialog(
             modal=True,
             title=ft.Row([
@@ -287,7 +288,7 @@ def main(page: ft.Page):
         if not is_error:
             def auto_close():
                 import time
-                time.sleep(2)
+                time.sleep(3)
                 try:
                     page.run_thread(_close)
                 except Exception:
