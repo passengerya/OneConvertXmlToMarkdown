@@ -299,6 +299,8 @@ def main(page: ft.Page):
                     raw = xf.read_text(encoding="utf-8", errors="replace")
                     cdata_parts = re.findall(r"<!\[CDATA\[(.*?)\]\]>", raw, re.DOTALL)
                     oe_styles = re.findall(r"<one:OE[^>]*style=\"([^\"]*)\"[^>]*>", raw)
+                    # Clean entities like &#xA; → ;
+                    oe_t = re.sub(r"&#x?[a-fA-F0-9]+;", ";", "\n".join(oe_styles))
                     cdata_t = "\n".join(cdata_parts)
                     oe_t = "\n".join(oe_styles)
                     if not cdata_t.strip() and not oe_t.strip():

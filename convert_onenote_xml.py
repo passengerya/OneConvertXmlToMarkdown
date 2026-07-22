@@ -1004,7 +1004,16 @@ class OneNoteXMLToMarkdownConverter:
             if name in {"Meta", "List", "OutlookTask", "Tag"}:
                 continue
             if name == "T":
-                text = html_fragment_to_markdown_text(child.text or "")
+                raw_text = child.text or ""
+                # Inject OE-level color into CDATA as span wrapper
+                oe_style = oe.get("style") or ""
+                color_m = re.search(r"(?:^|;\s*)color:\s*([#a-zA-Z0-9]+)", oe_style)
+                if color_m and raw_text.strip():
+                    c = color_m.group(1)
+                    if c.lower() not in ("white", "#ffffff", "#fff", "automatic",
+                                         "black", "#000000", "#000"):
+                        raw_text = f'<span style="color:{c}">{raw_text}</span>'
+                text = html_fragment_to_markdown_text(raw_text)
                 if text:
                     text = self.apply_list_prefix_from_oe(text, oe, ctx)
                     blocks.extend(self.render_text_block(text, ctx))
