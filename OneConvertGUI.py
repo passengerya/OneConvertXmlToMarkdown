@@ -433,7 +433,7 @@ def main(page: ft.Page):
                 continue
             md_text = re.sub(open_pat + r'(.*?)' + close_pat,
                              marker + r'\1' + marker,
-                             md_text, flags=re.DOTALL)
+                             md_text, flags=re.DOTALL | re.IGNORECASE)
         return md_text
 
     # -- pipeline (multi-file: PS for each .one, in-process for Markdown) --
