@@ -584,7 +584,7 @@ def main(page: ft.Page):
                                     attachment_dir=None, sort_key="name",
                                     recursive=True, image_syntax=syntax,
                                     copy_attachments=chk_assets.value,
-                                    asset_dir_name=asset_rel,
+                                    asset_dir_name=f"../{asset_rel}",
                                 )
                             total_md += len(written)
                             ext_imgs += resolver.extracted_from_xml_count
