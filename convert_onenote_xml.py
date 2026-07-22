@@ -312,8 +312,9 @@ def normalize_color(color: str | None) -> str | None:
 
 def map_color(color: str) -> str:
     c = normalize_color(color) or color
-    if c == "yellow":
-        return "#ff0000"
+    # white → black for readability on light backgrounds
+    if c in ("white", "#ffffff", "#fff"):
+        return "#000000"
     return c.lower()
 
 
