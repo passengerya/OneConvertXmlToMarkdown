@@ -83,11 +83,45 @@ def main(page: ft.Page):
     cfg = load_config()
 
     # -- controls (defaults from saved config or sensible defaults) ---
-    txt_input = ft.TextField(
-        label="输入文件 (.one / .xml)", hint_text="可多选，以 ; 分隔",
-        expand=True, icon=ft.Icons.DESIGN_SERVICES_OUTLINED, dense=True,
-        value="",
-    )
+    file_list: list[str] = []
+    file_col = ft.Column([], spacing=2, scroll=ft.ScrollMode.AUTO)
+
+    def _rebuild_file_ui():
+        file_col.controls.clear()
+        for f in file_list:
+            name = Path(f).name if len(f) < 80 else "..." + f[-77:]
+            file_col.controls.append(
+                ft.Row([
+                    ft.Text(name, size=12, expand=True, overflow=ft.TextOverflow.ELLIPSIS),
+                    ft.IconButton(icon=ft.Icons.CLOSE, icon_size=16,
+                                  tooltip=f"移除 {Path(f).name}",
+                                  on_click=lambda e, fp=f: _remove_file(fp)),
+                ], spacing=4))
+        if not file_list:
+            file_col.controls.append(
+                ft.Text("点击浏览选择文件 (.one / .xml)", size=12, color=ft.Colors.SECONDARY))
+        file_col.update()
+
+    def _remove_file(fp: str):
+        if fp in file_list:
+            file_list.remove(fp)
+        _rebuild_file_ui()
+
+    def _clear_files():
+        file_list.clear()
+        _rebuild_file_ui()
+
+    file_picker_row = ft.Row([
+        ft.Container(content=file_col, expand=True,
+                     bgcolor=ft.Colors.SURFACE_CONTAINER_HIGHEST,
+                     border=ft.Border.all(1, ft.Colors.OUTLINE_VARIANT),
+                     border_radius=8, padding=8, height=90),
+        ft.Column([
+            ft.Button(content=ft.Text("浏览"), icon=ft.Icons.SEARCH,
+                      on_click=lambda _: browse_files()),
+        ], spacing=4, alignment=ft.MainAxisAlignment.CENTER),
+    ], spacing=8)
+
     txt_xml = ft.TextField(
         label="XML 输出目录",
         value=cfg.get("xml_dir", str(OUT_BASE / "xml")),
@@ -120,7 +154,7 @@ def main(page: ft.Page):
     log_lines: list[str] = []
 
     md_ctrls = [ddl_syntax, chk_assets, txt_asset]
-    all_ctrls = [txt_input, txt_xml, txt_md, chk_empty, chk_skip, chk_assets, chk_md_only,
+    all_ctrls = [txt_xml, txt_md, chk_empty, chk_skip, chk_assets, chk_md_only,
                  chk_annotate, ddl_syntax, txt_asset]
 
     btn_run = ft.Button(content=ft.Text("开始转换"), icon=ft.Icons.PLAY_ARROW,
@@ -154,17 +188,14 @@ def main(page: ft.Page):
 
     fp = ft.FilePicker()
 
-    def browse_file(target: ft.TextField, _):
+    def browse_files():
         async def _pick():
             r = await fp.pick_files(allowed_extensions=["one", "xml"], allow_multiple=True)
             if r:
-                paths = [f.path for f in r]
-                # Append to existing input
-                existing = [p.strip() for p in (target.value or "").split(";") if p.strip()]
-                for p in paths:
-                    if p not in existing:
-                        existing.append(p)
-                target.value = ";".join(existing)
+                for f in r:
+                    if f.path not in file_list:
+                        file_list.append(f.path)
+                _rebuild_file_ui()
                 page.update()
         page.run_task(_pick)
 
@@ -411,15 +442,14 @@ def main(page: ft.Page):
         if running:
             return
 
-        in_raw = (txt_input.value or "").strip()
         xout_base = (txt_xml.value or "").strip() or str(OUT_BASE / "xml")
         mout_base = (txt_md.value or "").strip() or str(OUT_BASE / "markdown")
         adir = (txt_asset.value or "").strip()
 
-        if not in_raw:           snack("请选择 .one 或 .xml 文件"); return
+        if not file_list:        snack("请选择 .one 或 .xml 文件"); return
         if not chk_assets.value and not adir: snack("资源目录名不能为空"); return
 
-        files = [p.strip() for p in in_raw.split(";") if p.strip()]
+        files = list(file_list)
         ones = [f for f in files if f.lower().endswith(".one")]
         xmls = [f for f in files if f.lower().endswith(".xml")]
         if not ones and not xmls: snack("必须是 .one 或 .xml 文件"); return
@@ -616,7 +646,7 @@ def main(page: ft.Page):
     btn_stop.on_click = stop
 
     # Save settings on change
-    for ctrl in [txt_input, txt_xml, txt_md, chk_empty, chk_skip, chk_assets, chk_md_only, chk_annotate, txt_asset]:
+    for ctrl in [txt_xml, txt_md, chk_empty, chk_skip, chk_assets, chk_md_only, chk_annotate, txt_asset]:
         orig = ctrl.on_change
         def _wrap(c, o):
             c.on_change = lambda e: (save_settings(), o(e) if o else None)
@@ -639,6 +669,7 @@ def main(page: ft.Page):
                                 color=ft.Colors.SECONDARY),
                     ], spacing=2),
                     ft.Container(expand=True),
+                    ft.IconButton(icon=ft.Icons.DELETE_OUTLINED, tooltip="清空文件列表", on_click=lambda _: _clear_files()),
                     ft.IconButton(icon=ft.Icons.BRIGHTNESS_4_OUTLINED, tooltip="切换主题", on_click=toggle_theme),
                     ft.IconButton(icon=ft.Icons.INFO_OUTLINED, tooltip="关于", on_click=show_about),
                 ]),
@@ -646,8 +677,7 @@ def main(page: ft.Page):
 
                 # File paths
                 ft.Text("文件路径", weight=ft.FontWeight.BOLD, size=14),
-                ft.Row([txt_input, ft.Button(content=ft.Text("浏览"), icon=ft.Icons.SEARCH,
-                                              on_click=lambda _: browse_file(txt_input, _))]),
+                file_picker_row,
                 ft.Container(height=6),
                 ft.Row([txt_xml,  ft.Button(content=ft.Text("浏览"), icon=ft.Icons.SEARCH,
                                               on_click=lambda _: browse_dir(txt_xml, _)),
@@ -694,10 +724,11 @@ def main(page: ft.Page):
     )
 
     # Auto-load default .one (only first run)
-    if not txt_input.value:
+    if not file_list:
         default = ROOT / "新临检.one"
         if default.exists():
-            txt_input.value = str(default)
+            file_list.append(str(default))
+            _rebuild_file_ui()
 
 
 if __name__ == "__main__":
