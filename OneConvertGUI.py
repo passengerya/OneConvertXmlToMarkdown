@@ -473,9 +473,16 @@ def main(page: ft.Page):
 
             log_lines.append(f"[{ts()}] 开始转换")
             log_lines.append(f"文件数: {len(files)} ({len(ones)} one, {len(xmls)} xml)")
-            if not chk_skip.value:
-                log_lines.append(f"MD:   {mout_base}")
-                log_lines.append(f"语法: {ddl_syntax.value}")
+            for i, f in enumerate(files, 1):
+                log_lines.append(f"  [{i}] {Path(f).name}")
+            log_lines.append(f"XML dir: {xout_base}")
+            if chk_skip.value:
+                log_lines.append("模式: 仅 XML")
+            else:
+                log_lines.append(f"MD dir:  {mout_base}")
+                log_lines.append(f"图片语法: {ddl_syntax.value}  资源目录: {adir}")
+            if chk_annotate.value:
+                log_lines.append("标注转换: 已启用")
             log_lines.append("-" * 50)
 
             xml_script = str(ROOT / "Convert-OneNoteSectionToXml.ps1")
@@ -493,9 +500,10 @@ def main(page: ft.Page):
                     import convert_onenote_xml as converter
 
                     # ── Phase 1: .one → XML ──
-                    for one_path in ones:
+                    log_lines.append(f"[{ts()}] Phase 1: .one → XML ({len(ones)} 个)")
+                    for idx, one_path in enumerate(ones, 1):
                         stem = Path(one_path).stem
-                        log_lines.append(f"[{ts()}] .one -> XML: {stem}")
+                        log_lines.append(f"  [{idx}/{len(ones)}] {stem}")
                         ps_args = [
                             get_ps(), "-NoProfile", "-ExecutionPolicy", "Bypass",
                             "-File", xml_script,
@@ -543,7 +551,8 @@ def main(page: ft.Page):
 
                     # ── Phase 3: XML → MD ──
                     if not chk_skip.value:
-                        for xml_src in xml_dirs:
+                        log_lines.append(f"[{ts()}] Phase 2: XML → MD ({len(xml_dirs)} 个)")
+                        for idx, xml_src in enumerate(xml_dirs, 1):
                             if xml_src.is_file():
                                 # Single XML file
                                 mout_all = Path(mout_base)
@@ -594,8 +603,15 @@ def main(page: ft.Page):
 
                 # ── Phase 4: apply annotations ──
                 if chk_annotate.value:
+                    log_lines.append(f"[{ts()}] 标注转换: {len(annot_items)} 种标注待映射")
+                    for lbl, v, _, _ in annot_items:
+                        log_lines.append(f"  {lbl}")
                     def _apply_and_finish(amap=None):
                         if amap:
+                            count = len(amap)
+                            log_lines.append(f"  应用 {count} 项映射")
+                            for label, marker in amap.items():
+                                log_lines.append(f"    {label} → {marker}")
                             for md_path in all_written:
                                 try:
                                     t = md_path.read_text(encoding="utf-8-sig")
