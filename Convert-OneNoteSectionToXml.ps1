@@ -346,7 +346,7 @@ for ($i = 0; $i -lt $pages.Count; $i++) {
     $hasBody = Test-PageHasBodyContent -PageXmlDoc $pageDoc
 
     if ($IncludeEmptyPages -or $hasBody) {
-        $pageFileBaseName = ConvertTo-SafeName -Name $title
+        $pageFileBaseName = "{0:D3} {1}" -f [int]$numberStack[$numberStack.Count - 1], (ConvertTo-SafeName -Name $title)
         $pageXmlPath = Get-UniqueFilePath -Directory $xmlOutputDir -BaseName $pageFileBaseName -Extension ".xml"
         Save-Utf8File -Path $pageXmlPath -Content $pageXml
         $stats.ExportedXmlPages++
